@@ -20,7 +20,10 @@ class GoogleAgentClient:
 
     def __init__(self) -> None:
         if not settings.google.api_key:
-            logger.warning("GOOGLE_API_KEY is not set; agent calls will fail at runtime.")
+            raise ValueError(
+                "GOOGLE_API_KEY is not set. Please set it in your environment variables or backend/.env file. "
+                "Get your API key from https://aistudio.google.com/apikey"
+            )
 
         self._client = genai.Client(api_key=settings.google.api_key)
         self._model_name = settings.google.model
@@ -36,30 +39,48 @@ class GoogleAgentClient:
 
         prompt = (
             "You are an investment strategy planner. "
-            "Output a JSON object containing an array 'strategies', where each "
-            "strategy follows the provided schema (rules, params, timeframe, universe). "
-            "Do not include any prose outside the JSON."
+            "You MUST output ONLY a valid JSON object (no markdown, no code blocks, no explanations). "
+            "The JSON must contain an array 'strategies', where each strategy has: "
+            "strategy_id (string), name (optional string), description (optional string), "
+            "universe (array of strings), rules (array of objects with type, indicator, params), "
+            "and params (object with position_sizing, fraction, timeframe). "
+            "Example format: {\"strategies\": [{\"strategy_id\": \"sma_cross_1\", \"name\": \"SMA Crossover\", \"universe\": [\"AAPL\"], \"rules\": [{\"type\": \"entry\", \"indicator\": \"sma_cross\", \"params\": {\"fast\": 20, \"slow\": 50}}], \"params\": {\"position_sizing\": \"fixed_fraction\", \"fraction\": 0.02, \"timeframe\": \"1d\"}}]}"
         )
 
-        response = self._client.models.generate_content(
-            model=self._model_name,
-            contents=[
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "text": prompt,
-                        },
-                        {
-                            "text": f"Mission: {mission}",
-                        },
-                        {
-                            "text": f"Context: {context}",
-                        },
-                    ],
-                }
-            ],
-        )
+        try:
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": prompt,
+                            },
+                            {
+                                "text": f"Mission: {mission}",
+                            },
+                            {
+                                "text": f"Context: {context}",
+                            },
+                        ],
+                    }
+                ],
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            # Check for API key related errors
+            if "API key" in error_msg or "API_KEY" in error_msg or "INVALID_ARGUMENT" in error_msg:
+                logger.error("Google API key error", exc_info=True)
+                raise ValueError(
+                    f"Google API key is invalid or not properly configured. "
+                    f"Please check your GOOGLE_API_KEY in backend/.env or environment variables. "
+                    f"Get a valid API key from https://aistudio.google.com/apikey. "
+                    f"Original error: {error_msg}"
+                ) from exc
+            # Re-raise other errors with context
+            logger.error("Google API call failed", exc_info=True)
+            raise RuntimeError(f"Failed to call Google Agent API: {error_msg}") from exc
 
         # The exact structure depends on the google-genai SDK; here we assume
         # a .text property on the first candidate, which you'll adapt as needed.

@@ -60,23 +60,51 @@ APP_DEBUG=true
 
 ### Installation
 
-1. **Backend Dependencies**:
+1. **Create and Activate Virtual Environment**:
+
+   **On Linux/macOS**:
    ```bash
    cd backend
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+   **On Windows**:
+   ```bash
+   cd backend
+   python -m venv venv
+   venv\Scripts\activate
+   ```
+
+   **Alternative: Use setup scripts**:
+   - Linux/macOS: `./setup_venv.sh`
+   - Windows: `setup_venv.bat`
+
+2. **Install Backend Dependencies**:
+   ```bash
+   pip install --upgrade pip
    pip install -r requirements.txt
    ```
 
-2. **Start Backend Server**:
+3. **Start Backend Server**:
    ```bash
-   cd backend
+   # Make sure virtual environment is activated
    uvicorn app.main:app --reload --port 8000
    ```
 
    The API will be available at `http://localhost:8000`
 
+   **Note**: Always activate the virtual environment before running the server. You should see `(venv)` in your terminal prompt when it's active.
+
 3. **Verify Health**:
    ```bash
    curl http://localhost:8000/health/
+   ```
+   
+   Or use the Python test script:
+   ```bash
+   cd test
+   python test_api.py --test health
    ```
 
    Expected response:
@@ -91,11 +119,60 @@ APP_DEBUG=true
 
 ## Backend Testing
 
-### Test 1: Non-Executing Strategy Run (Backtest Only)
+### Automated Testing (Recommended)
+
+For easier testing, use the Python test script:
+
+```bash
+cd test
+pip install -r requirements.txt  # Install requests library
+python test_api.py              # Run all tests
+python test_api.py --test health  # Run specific test
+python test_api.py --test strategy  # Run strategy backtest test
+python test_api.py --test account  # Run account status test
+python test_api.py --test edge  # Run edge case tests
+python test_api.py --execute  # Include execution test (requires confirmation)
+```
+
+See `test/README.md` for more details.
+
+### Manual Testing (curl commands)
+
+The following sections show both Python script and curl command options for each test.
+
+---
+
+### Test 1: Health Check
+
+**Python Script** (Recommended):
+```bash
+python test_api.py --test health
+```
+
+**Manual curl**:
 
 This test verifies the full pipeline without executing any trades.
 
-**Request**:
+**Request** (curl):
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mission": "Create a simple moving average crossover strategy",
+    "context": {
+      "universe": ["AAPL", "MSFT"],
+      "data_range": "2023-01-01:2024-01-01",
+      "execute": false
+    }
+  }'
+```
+
+**Python Script** (Recommended):
+```bash
+python test_api.py --test strategy
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -162,15 +239,38 @@ curl -X POST http://localhost:8000/strategies/run \
 - ✅ `execution_fills` is empty (since `execute=false`)
 - ✅ No `execution_error`
 
-### Test 2: Strategy Run with Real Data (Yahoo Finance)
+### Test 2: Root Status
+
+**Python Script** (Recommended):
+```bash
+python test_api.py --test status
+```
+
+**Manual curl**:
+```bash
+curl http://localhost:8000/status
+```
+
+**What to Verify**:
+- ✅ Response contains app name, environment, and debug status
+- ✅ Endpoint is accessible
+
+---
+
+### Test 3: Strategy Run with Real Data (Yahoo Finance)
 
 Test with real market data instead of synthetic.
 
 **Setup**:
-1. Set `DATA_SOURCE=yahoo` in `.env`
+1. Set `DATA_SOURCE=yahoo` in `backend/.env`
 2. Restart the backend server
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --test strategy
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -192,11 +292,21 @@ curl -X POST http://localhost:8000/strategies/run \
 
 **Note**: Yahoo Finance may rate-limit requests. If you see errors, wait a few seconds and retry, or switch back to `DATA_SOURCE=synthetic` for testing.
 
-### Test 3: Order Generation Verification
+**Important**: Make sure your virtual environment is activated before running the server. You should see `(venv)` in your terminal prompt.
+
+---
+
+### Test 4: Order Generation Verification
 
 Verify that orders are generated correctly from backtest results.
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --test strategy
+# The script automatically validates order generation in the response
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -227,15 +337,23 @@ curl -X POST http://localhost:8000/strategies/run \
 }
 ```
 
-### Test 4: Risk Assessment
+---
+
+### Test 5: Risk Assessment
 
 Test that risk engine properly validates orders.
 
 **Setup**: Add a symbol to blacklist in config or test with large order sizes.
 
-**Request** (with blacklisted symbol):
+**Python Script** (Recommended):
 ```bash
-# First, set RISK_BLACKLIST_SYMBOLS=TEST in .env, then:
+# The strategy test automatically checks risk assessment
+python test_api.py --test strategy
+```
+
+**Manual curl** (with blacklisted symbol):
+```bash
+# First, set RISK_BLACKLIST_SYMBOLS=TEST in backend/.env, then:
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
   -d '{
@@ -262,16 +380,24 @@ curl -X POST http://localhost:8000/strategies/run \
 }
 ```
 
-### Test 5: Execution Flow (Paper Trading)
+---
+
+### Test 6: Execution Flow (Paper Trading)
 
 **⚠️ WARNING**: This will execute real orders in your Alpaca paper trading account. Only test with paper trading credentials.
 
 **Prerequisites**:
 1. Valid Alpaca paper trading API credentials
-2. `ALLOW_EXECUTE=true` in `.env` OR `APP_ENV=staging` (not `dev`)
+2. `ALLOW_EXECUTE=true` in `backend/.env` OR `APP_ENV=staging` (not `dev`)
 3. Paper trading account has sufficient cash
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --execute
+# The script will prompt for confirmation before executing
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -314,11 +440,16 @@ curl -X POST http://localhost:8000/strategies/run \
 - Check "Orders" section for recent orders
 - Verify order details match `execution_fills`
 
-### Test 6: Account Status Endpoint
+### Test 7: Account Status Endpoint
 
 Check current Alpaca account and portfolio status.
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --test account
+```
+
+**Manual curl**:
 ```bash
 curl http://localhost:8000/trading/account
 ```
@@ -360,7 +491,25 @@ curl http://localhost:8000/trading/account
 3. **Test risk assessment** with edge cases (blacklist, large orders)
 4. **Only then test execution** (`execute=true`) with small orders in paper trading
 
-### Test Scenario: Complete Strategy Run
+### Automated End-to-End Test
+
+**Python Script** (Recommended):
+```bash
+# Run all tests except execution
+python test_api.py
+
+# Run all tests including execution (requires confirmation)
+python test_api.py --execute
+```
+
+The script will:
+- Test health and status endpoints
+- Run strategy backtest and validate response structure
+- Check account status
+- Test edge cases
+- Optionally test execution (with confirmation)
+
+### Manual End-to-End Test Scenario
 
 ```bash
 # Step 1: Backtest only
@@ -395,15 +544,22 @@ curl -X POST http://localhost:8000/strategies/run \
 cat response_execute.json | jq '.candidates[0].execution_fills'
 ```
 
+**Note**: The Python test script automatically saves responses to `test_strategy_response.json` for inspection.
+
 ---
 
 ## Edge Cases & Error Handling
 
-### Test 1: Missing Market Data
+### Test 8: Missing Market Data
 
 **Scenario**: Request data for a symbol that doesn't exist or has no data.
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --test edge
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -421,7 +577,9 @@ curl -X POST http://localhost:8000/strategies/run \
 - ✅ Backtest returns empty trade log or error message
 - ✅ No crash, error logged
 
-### Test 2: LLM Failure
+---
+
+### Test 9: LLM Failure
 
 **Scenario**: Google API key invalid or rate-limited.
 
@@ -430,13 +588,23 @@ curl -X POST http://localhost:8000/strategies/run \
 - ✅ Request fails with appropriate HTTP status (500)
 - ✅ Error message indicates LLM issue
 
-### Test 3: Risk Violations
+**Note**: This is automatically detected by the Python test script when running strategy tests.
+
+---
+
+### Test 10: Risk Violations
 
 **Scenario**: Strategy generates orders that violate risk rules.
 
-**Setup**: Set `RISK_MAX_TRADE_NOTIONAL=100` (very low) in `.env`
+**Setup**: Set `RISK_MAX_TRADE_NOTIONAL=100` (very low) in `backend/.env`
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --test strategy
+# The script will show risk violations in the output
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -454,11 +622,19 @@ curl -X POST http://localhost:8000/strategies/run \
 - ✅ `risk.violations` contains rejection reasons
 - ✅ `risk.approved_trades` is empty or reduced
 
-### Test 4: Execution Blocked in Dev Mode
+---
+
+### Test 11: Execution Blocked in Dev Mode
 
 **Scenario**: Try to execute in dev mode without `ALLOW_EXECUTE=true`.
 
-**Request**:
+**Python Script** (Recommended):
+```bash
+python test_api.py --execute
+# The script will show execution errors if blocked
+```
+
+**Manual curl**:
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -476,11 +652,19 @@ curl -X POST http://localhost:8000/strategies/run \
 - ✅ `execution_fills` is empty
 - ✅ Logs show blocking reason
 
-### Test 5: Alpaca API Failure
+---
+
+### Test 12: Alpaca API Failure
 
 **Scenario**: Invalid Alpaca credentials or network issue.
 
-**Setup**: Set invalid `ALPACA_API_KEY` in `.env`
+**Setup**: Set invalid `ALPACA_API_KEY` in `backend/.env`
+
+**Python Script** (Recommended):
+```bash
+python test_api.py --test account
+# The script will show appropriate warnings for API failures
+```
 
 **Expected Behavior**:
 - ✅ Error caught and logged
@@ -517,6 +701,19 @@ curl -X POST http://localhost:8000/strategies/run \
 ---
 
 ## Troubleshooting
+
+### Issue: "ModuleNotFoundError" or "No module named 'app'"
+
+**Causes**:
+- Virtual environment not activated
+- Running from wrong directory
+- Dependencies not installed
+
+**Solutions**:
+- Activate virtual environment: `source backend/venv/bin/activate` (Linux/macOS) or `backend\venv\Scripts\activate` (Windows)
+- Verify you see `(venv)` in terminal prompt
+- Install dependencies: `pip install -r requirements.txt`
+- Run server from project root or use `npm run backend`
 
 ### Issue: "No data found for symbol X"
 
@@ -587,8 +784,32 @@ curl -X POST http://localhost:8000/strategies/run \
 
 ---
 
+## Test Summary
+
+The Python test script (`test_api.py`) provides automated testing for all endpoints:
+
+| Test # | Test Name | Python Command | Status |
+|--------|-----------|----------------|--------|
+| 1 | Health Check | `python test_api.py --test health` | ✅ Automated |
+| 2 | Root Status | `python test_api.py --test status` | ✅ Automated |
+| 3 | Strategy Run (Backtest) | `python test_api.py --test strategy` | ✅ Automated |
+| 4 | Order Generation | Included in Test 3 | ✅ Automated |
+| 5 | Risk Assessment | Included in Test 3 | ✅ Automated |
+| 6 | Execution Flow | `python test_api.py --execute` | ✅ Automated (with confirmation) |
+| 7 | Account Status | `python test_api.py --test account` | ✅ Automated |
+| 8 | Missing Data | `python test_api.py --test edge` | ✅ Automated |
+| 9-12 | Error Handling | Included in above tests | ✅ Automated |
+
+**Run all tests**:
+```bash
+python test_api.py  # All tests except execution
+python test_api.py --execute  # All tests including execution
+```
+
 ## Additional Resources
 
+- **Python Test Script**: `test/test_api.py` - Automated API testing
+- **Test Documentation**: `test/README.md` - Quick reference for test script
 - **API Documentation**: Visit `http://localhost:8000/docs` for interactive Swagger UI
 - **Logs**: Check backend console output for detailed execution traces
 - **Alpaca Dashboard**: https://app.alpaca.markets/paper/dashboard/overview

@@ -31,8 +31,17 @@ The backend acts as an orchestrator that uses Google AI Agents to plan strategie
 
 - Node.js 22+ (recommended: use [nvm](https://github.com/nvm-sh/nvm))
 - Python 3.11+ (recommended: use [pyenv](https://github.com/pyenv/pyenv))
-- [uv](https://github.com/astral-sh/uv) for Python package management
+- [uv](https://github.com/astral-sh/uv) for Python package management (optional, for faster setup)
 - A Supabase project ([create one here](https://supabase.com))
+
+### Python Virtual Environment
+
+The backend uses a Python virtual environment to isolate dependencies. The virtual environment will be created in `backend/venv/` (or `backend/.venv/` if using uv). Always activate it before running backend commands:
+
+- **Linux/macOS**: `source backend/venv/bin/activate`
+- **Windows**: `backend\venv\Scripts\activate`
+
+You'll know it's activated when you see `(venv)` in your terminal prompt.
 
 ## Quick Start
 
@@ -43,14 +52,25 @@ The backend acts as an orchestrator that uses Google AI Agents to plan strategie
 npm install
 
 # Setup backend (creates virtual environment and installs Python packages)
+# Option 1: Use npm script (uses uv if available)
 npm run setup:backend
+
+# Option 2: Manual setup with standard Python venv
+cd backend
+python3 -m venv venv  # or: python -m venv venv on Windows
+source venv/bin/activate  # or: venv\Scripts\activate on Windows
+pip install --upgrade pip
+pip install -r requirements.txt
+cd ..
 ```
+
+**Note**: The virtual environment will be created in `backend/venv/`. Make sure to activate it before running the backend server.
 
 ### 2. Configure Environment Variables
 
 Create environment files (these are gitignored and won't be committed).
 
-**Root `.env` file** (for backend):
+**`backend/.env` file** (for backend):
 
 ```bash
 # Optional: Supabase Configuration (if you use Supabase from backend)
@@ -67,6 +87,12 @@ GOOGLE_AGENT_ID=your_agent_id
 ALPACA_API_KEY=your_alpaca_paper_key
 ALPACA_SECRET_KEY=your_alpaca_paper_secret
 ALPACA_PAPER_BASE_URL=https://paper-api.alpaca.markets
+
+# Data source (synthetic or yahoo)
+DATA_SOURCE=synthetic  # or "yahoo" for real market data
+
+# Execution safety (set to "true" to allow execution in dev mode)
+ALLOW_EXECUTE=false  # Set to "true" only when testing with paper trading
 
 # Risk and data configuration (optional overrides)
 APP_ENV=dev
@@ -91,7 +117,10 @@ Or run them separately:
 
 ```bash
 # Terminal 1: Backend (runs on http://localhost:8000)
-npm run backend
+# Make sure virtual environment is activated first!
+cd backend
+source venv/bin/activate  # or: venv\Scripts\activate on Windows
+npm run backend  # or: uvicorn app.main:app --reload --port 8000
 
 # Terminal 2: Frontend (runs on http://localhost:5173)
 npm run frontend
@@ -207,8 +236,12 @@ This design keeps the core trading logic server-side and ready for future integr
 - `npm run preview` - Preview production build
 
 ### Backend
-- `npm run setup:backend` - Setup Python virtual environment and install dependencies
+- `npm run setup:backend` - Setup Python virtual environment and install dependencies (uses uv if available)
 - `npm run backend` - Run FastAPI server with hot reload
+- **Manual setup**: 
+  - Linux/macOS: `cd backend && ./setup_venv.sh`
+  - Windows: `cd backend && setup_venv.bat`
+  - Or manually: `python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
 
 ### Both
 - `npm run dev:both` - Run both frontend and backend simultaneously
@@ -294,12 +327,33 @@ const { data, error } = await supabase
 2. Set environment variables
 3. Deploy with Python 3.11+ runtime
 4. Run: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. **Note**: Production deployments typically don't need a virtual environment (dependencies installed globally), but you can use one if preferred
+
+## Testing
+
+### Automated API Testing
+
+A Python test script is available for automated API testing:
+
+```bash
+cd test
+pip install -r requirements.txt  # Install test dependencies
+python test_api.py                # Run all tests
+python test_api.py --test health  # Run specific test
+```
+
+See `test/README.md` and `test/testing.md` for detailed testing instructions.
 
 ## Troubleshooting
 
 ### Backend Issues
-- **Virtual environment not found**: Run `npm run setup:backend`
-- **Import errors**: Ensure you're in the `backend/` directory or using the venv Python
+- **Virtual environment not found**: 
+  - Run `npm run setup:backend` (uses uv if available)
+  - Or manually: `cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
+- **Virtual environment not activated**: 
+  - Activate it: `source backend/venv/bin/activate` (Linux/macOS) or `backend\venv\Scripts\activate` (Windows)
+  - You should see `(venv)` in your terminal prompt
+- **Import errors**: Ensure virtual environment is activated and you're using the venv Python
 - **Supabase connection fails**: Check `.env` file has correct `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 
 ### Frontend Issues

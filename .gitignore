@@ -65,6 +65,8 @@ coverage/
 .coverage
 htmlcov/
 .tox/
+test_*_response.json
+test/*_response.json
 
 # Logs
 logs/

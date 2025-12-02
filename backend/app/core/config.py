@@ -1,27 +1,40 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional
 
+from dotenv import load_dotenv
 from pydantic import AnyHttpUrl, BaseModel, Field
+
+# Load environment variables from .env file
+# Try backend/.env first, then backend/app/.env
+env_path = Path(__file__).parent.parent.parent / ".env"
+if not env_path.exists():
+    env_path = Path(__file__).parent.parent / ".env"
+
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    # If no .env file found, try loading from current directory (for when running from backend/)
+    load_dotenv(Path(__file__).parent.parent.parent / ".env", override=False)
 
 
 class AlpacaSettings(BaseModel):
-    api_key: Optional[str] = Field(default=None, alias="ALPACA_API_KEY")
-    secret_key: Optional[str] = Field(default=None, alias="ALPACA_SECRET_KEY")
+    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ALPACA_API_KEY"))
+    secret_key: Optional[str] = Field(default_factory=lambda: os.getenv("ALPACA_SECRET_KEY"))
     base_url: AnyHttpUrl = Field(
-        default="https://paper-api.alpaca.markets",
-        alias="ALPACA_PAPER_BASE_URL",
+        default_factory=lambda: os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
     )
 
 
 class GoogleAgentSettings(BaseModel):
-    api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
-    project_id: Optional[str] = Field(default=None, alias="GOOGLE_PROJECT_ID")
-    location: str = Field(default="global", alias="GOOGLE_LOCATION")
+    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("GOOGLE_API_KEY"))
+    project_id: Optional[str] = Field(default_factory=lambda: os.getenv("GOOGLE_PROJECT_ID"))
+    location: str = Field(default_factory=lambda: os.getenv("GOOGLE_LOCATION", "global"))
     # For google-genai style clients, you may only need model name
-    model: str = Field(default="gemini-2.0-flash", alias="GOOGLE_MODEL")
+    model: str = Field(default_factory=lambda: os.getenv("GOOGLE_MODEL", "gemini-2.0-flash"))
     # If you later create/configure an Agent in Google AI Studio, store its ID here
-    agent_id: Optional[str] = Field(default=None, alias="GOOGLE_AGENT_ID")
+    agent_id: Optional[str] = Field(default_factory=lambda: os.getenv("GOOGLE_AGENT_ID"))
 
 
 class RiskSettings(BaseModel):
@@ -36,7 +49,7 @@ class DataSettings(BaseModel):
         default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA"]
     )
     default_lookback_days: int = 365
-    source: str = Field(default="synthetic", alias="DATA_SOURCE")  # "synthetic" or "yahoo"
+    source: str = Field(default_factory=lambda: os.getenv("DATA_SOURCE", "synthetic"))  # "synthetic" or "yahoo"
 
 
 class AppSettings(BaseModel):

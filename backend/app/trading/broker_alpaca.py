@@ -24,8 +24,12 @@ class AlpacaBroker:
             logger.warning(
                 "Alpaca API credentials are not fully configured; broker calls will fail."
             )
+        # Normalize base_url to remove trailing /v2/ if present
+        base_url = str(settings.alpaca.base_url).rstrip("/")
+        if base_url.endswith("/v2"):
+            base_url = base_url[:-3]
         self._client = httpx.Client(
-            base_url=str(settings.alpaca.base_url),
+            base_url=base_url,
             headers={
                 "APCA-API-KEY-ID": settings.alpaca.api_key or "",
                 "APCA-API-SECRET-KEY": settings.alpaca.secret_key or "",

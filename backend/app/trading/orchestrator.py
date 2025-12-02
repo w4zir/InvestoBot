@@ -32,8 +32,23 @@ def _default_date_range() -> str:
 
 
 def _parse_date_range(dr: str) -> tuple[datetime, datetime]:
-    start_s, end_s = dr.split(":")
-    return datetime.fromisoformat(start_s), datetime.fromisoformat(end_s)
+    try:
+        start_s, end_s = dr.split(":")
+        # Handle date-only strings (YYYY-MM-DD) by adding time component
+        if len(start_s) == 10:  # Date only format
+            start_dt = datetime.fromisoformat(f"{start_s}T00:00:00")
+        else:
+            start_dt = datetime.fromisoformat(start_s)
+        
+        if len(end_s) == 10:  # Date only format
+            end_dt = datetime.fromisoformat(f"{end_s}T00:00:00")
+        else:
+            end_dt = datetime.fromisoformat(end_s)
+        
+        return start_dt, end_dt
+    except ValueError as e:
+        logger.error(f"Failed to parse date range '{dr}': {e}", exc_info=True)
+        raise ValueError(f"Invalid date range format '{dr}'. Expected format: 'YYYY-MM-DD:YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS:YYYY-MM-DDTHH:MM:SS'")
 
 
 def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:

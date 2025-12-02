@@ -5,7 +5,7 @@ Implements an event-driven backtest that evaluates strategy rules on historical
 OHLCV data and generates trade logs with realistic metrics.
 """
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -16,13 +16,47 @@ from app.trading.models import BacktestMetrics, BacktestRequest, BacktestResult,
 logger = get_logger(__name__)
 
 
-def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices: List[float], current_idx: int) -> bool:
+def _normalize_rule_type(rule_type: str, indicator: str) -> str:
+    """
+    Normalize rule type by mapping semantic types (like "entry") to technical types.
+    
+    Args:
+        rule_type: Original rule type (e.g., "entry", "exit", "crossover")
+        indicator: Indicator name (e.g., "sma_cross", "sma", "ema")
+    
+    Returns:
+        Normalized technical rule type (e.g., "crossover", "signal", "momentum")
+    """
+    # If already a technical type, return as-is
+    if rule_type in ["crossover", "signal", "momentum", "mean_reversion"]:
+        return rule_type
+    
+    # Map semantic types to technical types based on indicator
+    indicator_lower = indicator.lower()
+    
+    if rule_type == "entry" or rule_type == "exit":
+        # Map entry/exit rules based on indicator name
+        if "cross" in indicator_lower or "crossover" in indicator_lower:
+            return "crossover"
+        elif "momentum" in indicator_lower:
+            return "momentum"
+        elif "mean_reversion" in indicator_lower or "reversion" in indicator_lower:
+            return "mean_reversion"
+        else:
+            # Default to signal for other indicators
+            return "signal"
+    
+    # Unknown type, return as-is (will be handled by error case)
+    return rule_type
+
+
+def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices: List[float], current_idx: int, is_exit: bool = False) -> bool:
     """
     Evaluate a single strategy rule at a given index.
 
     Args:
-        rule_type: Type of rule (e.g., "signal", "crossover")
-        indicator: Indicator name (e.g., "sma", "ema")
+        rule_type: Type of rule (e.g., "signal", "crossover", "entry")
+        indicator: Indicator name (e.g., "sma", "ema", "sma_cross")
         params: Rule parameters
         prices: Price series
         current_idx: Current bar index
@@ -34,29 +68,18 @@ def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices
         return False
 
     try:
-        from app.trading.indicators import evaluate_indicator
-
-        indicator_values = evaluate_indicator(indicator, prices, params)
-
-        if current_idx >= len(indicator_values) or np.isnan(indicator_values[current_idx]):
-            return False
-
-        current_value = indicator_values[current_idx]
-        prev_value = indicator_values[current_idx - 1] if current_idx > 0 else float("nan")
-
-        if rule_type == "signal":
-            threshold = params.get("threshold", 0.0)
-            direction = params.get("direction", "above")  # "above" or "below"
-            if direction == "above":
-                return current_value > threshold
-            else:
-                return current_value < threshold
-
-        elif rule_type == "crossover":
+        # Normalize rule type (e.g., "entry" -> "crossover" or "signal")
+        normalized_type = _normalize_rule_type(rule_type, indicator)
+        
+        # Handle crossover rules first (they don't use evaluate_indicator)
+        if normalized_type == "crossover":
             # Moving average crossover: fast MA crosses above/below slow MA
-            fast_window = params.get("fast_window", 10)
-            slow_window = params.get("slow_window", 20)
-            direction = params.get("direction", "above")  # "above" for bullish, "below" for bearish
+            # Support both "fast_window"/"slow_window" and "fast"/"slow" parameter names
+            fast_window = params.get("fast_window") or params.get("fast", 10)
+            slow_window = params.get("slow_window") or params.get("slow", 20)
+            # Default direction: "above" for entry, "below" for exit
+            default_direction = "below" if is_exit else "above"
+            direction = params.get("direction", default_direction)  # "above" for bullish, "below" for bearish
 
             fast_ma = sma(prices, fast_window)
             slow_ma = sma(prices, slow_window)
@@ -79,7 +102,24 @@ def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices
                 # Bearish crossover: fast crosses below slow
                 return fast_prev >= slow_prev and fast_current < slow_current
 
-        elif rule_type == "momentum":
+        elif normalized_type == "signal":
+            # Signal rule: uses evaluate_indicator
+            from app.trading.indicators import evaluate_indicator
+
+            indicator_values = evaluate_indicator(indicator, prices, params)
+
+            if current_idx >= len(indicator_values) or np.isnan(indicator_values[current_idx]):
+                return False
+
+            current_value = indicator_values[current_idx]
+            threshold = params.get("threshold", 0.0)
+            direction = params.get("direction", "above")  # "above" or "below"
+            if direction == "above":
+                return current_value > threshold
+            else:
+                return current_value < threshold
+
+        elif normalized_type == "momentum":
             # Price momentum: price > MA and recent return > threshold
             window = params.get("window", 20)
             return_threshold = params.get("return_threshold", 0.02)
@@ -103,7 +143,7 @@ def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices
             else:
                 return price_above_ma
 
-        elif rule_type == "mean_reversion":
+        elif normalized_type == "mean_reversion":
             # Mean reversion: Z-score indicates oversold/overbought
             window = params.get("window", 20)
             threshold = params.get("threshold", 2.0)
@@ -124,7 +164,7 @@ def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices
                 return z > threshold  # Overbought, sell signal
 
         else:
-            logger.warning(f"Unknown rule type: {rule_type}")
+            logger.warning(f"Unknown rule type: {rule_type} (normalized: {normalized_type})")
             return False
 
     except Exception as e:
@@ -132,27 +172,38 @@ def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices
         return False
 
 
-def _evaluate_strategy_rules(strategy_rules: List, prices: List[float], current_idx: int) -> bool:
+def _evaluate_strategy_rules(strategy_rules: List, prices: List[float], current_idx: int, filter_type: Optional[str] = None) -> bool:
     """
-    Evaluate all strategy rules (AND logic - all must be true).
+    Evaluate strategy rules (AND logic - all must be true).
 
     Args:
         strategy_rules: List of StrategyRule objects
         prices: Price series
         current_idx: Current bar index
+        filter_type: Optional filter to only evaluate rules of this type (e.g., "entry", "exit")
 
     Returns:
-        True if all rules are satisfied
+        True if all filtered rules are satisfied
     """
     if not strategy_rules:
         return False
 
-    for rule in strategy_rules:
+    # Filter rules by type if filter_type is specified
+    filtered_rules = strategy_rules
+    if filter_type:
+        filtered_rules = [rule for rule in strategy_rules if rule.type == filter_type]
+        # If no rules match the filter, return False
+        if not filtered_rules:
+            return False
+
+    # Evaluate all filtered rules (AND logic)
+    is_exit = filter_type == "exit" if filter_type else False
+    for rule in filtered_rules:
         rule_type = rule.type
         indicator = rule.indicator
         params = rule.params or {}
 
-        if not _evaluate_strategy_rule(rule_type, indicator, params, prices, current_idx):
+        if not _evaluate_strategy_rule(rule_type, indicator, params, prices, current_idx, is_exit=is_exit):
             return False
 
     return True
@@ -222,6 +273,16 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
     prices = [bar["close"] for bar in bars]
     timestamps = [bar["timestamp"] for bar in bars]
 
+    # Separate entry and exit rules
+    entry_rules = [rule for rule in strategy.rules if rule.type == "entry"]
+    exit_rules = [rule for rule in strategy.rules if rule.type == "exit"]
+    
+    # If no explicit entry/exit rules, treat all rules as entry rules (backward compatibility)
+    if not entry_rules and not exit_rules:
+        entry_rules = strategy.rules
+        exit_rules = []
+        logger.debug("No explicit entry/exit rules found, treating all rules as entry rules")
+
     # Track position state (long/flat)
     in_position = False
     entry_price = 0.0
@@ -232,8 +293,15 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
         current_price = prices[i]
         current_timestamp = timestamps[i]
 
-        # Evaluate strategy rules
-        signal = _evaluate_strategy_rules(strategy.rules, prices, i)
+        # Evaluate entry or exit signals based on position state
+        if not in_position:
+            # When not in position, evaluate entry rules
+            entry_signal = _evaluate_strategy_rules(entry_rules, prices, i, filter_type="entry") if entry_rules else False
+            exit_signal = False
+        else:
+            # When in position, evaluate exit rules
+            entry_signal = False
+            exit_signal = _evaluate_strategy_rules(exit_rules, prices, i, filter_type="exit") if exit_rules else False
 
         # Calculate portfolio value
         portfolio_value = cash
@@ -243,7 +311,7 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
         portfolio_values.append(portfolio_value)
 
         # Trading logic: enter/exit positions
-        if signal and not in_position:
+        if entry_signal and not in_position:
             # Enter long position
             params = strategy.params
             if params.position_sizing == "fixed_fraction" and params.fraction:
@@ -283,7 +351,7 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
                         extra={"idx": i, "price": fill_price, "quantity": quantity},
                     )
 
-        elif not signal and in_position:
+        elif exit_signal and in_position:
             # Exit position
             quantity = positions.get(primary_symbol, 0.0)
             if quantity > 0:
