@@ -36,6 +36,7 @@ class DataSettings(BaseModel):
         default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA"]
     )
     default_lookback_days: int = 365
+    source: str = Field(default="synthetic", alias="DATA_SOURCE")  # "synthetic" or "yahoo"
 
 
 class AppSettings(BaseModel):

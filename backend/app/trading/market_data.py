@@ -5,7 +5,6 @@ from typing import Dict, List
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
-
 logger = get_logger(__name__)
 settings = get_settings()
 
@@ -16,18 +15,51 @@ def _ensure_data_dir() -> Path:
     return path
 
 
-def load_data(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
+def _load_data_yahoo(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
     """
-    Placeholder for OHLCV data loading.
-
-    For now, this returns synthetic data suitable for simple backtests.
-    Later, wire this to Yahoo/Alpha Vantage or other data providers.
+    Load OHLCV data from Yahoo Finance using yfinance.
     """
-    _ensure_data_dir()
-    logger.info(
-        "Loading synthetic market data", extra={"universe": universe, "start": start.isoformat(), "end": end.isoformat()}
-    )
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.error("yfinance not installed. Install with: pip install yfinance")
+        raise
 
+    data: Dict[str, List[Dict]] = {}
+    for symbol in universe:
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(start=start.date(), end=end.date())
+            if df.empty:
+                logger.warning(f"No data found for {symbol} in date range")
+                continue
+
+            series: List[Dict] = []
+            for idx, row in df.iterrows():
+                # Convert pandas Timestamp to datetime
+                ts = idx.to_pydatetime() if hasattr(idx, "to_pydatetime") else datetime.fromisoformat(str(idx))
+                candle = {
+                    "timestamp": ts,
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                    "volume": float(row["Volume"]),
+                }
+                series.append(candle)
+            data[symbol] = series
+            logger.info(f"Loaded {len(series)} bars for {symbol} from Yahoo Finance")
+        except Exception as e:
+            logger.error(f"Failed to load data for {symbol} from Yahoo Finance: {e}", exc_info=True)
+            # Continue with other symbols
+
+    return data
+
+
+def _load_data_synthetic(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
+    """
+    Generate synthetic OHLCV data for testing.
+    """
     data: Dict[str, List[Dict]] = {}
     days = (end - start).days or 1
 
@@ -50,6 +82,32 @@ def load_data(universe: List[str], start: datetime, end: datetime) -> Dict[str, 
         data[symbol] = series
 
     return data
+
+
+def load_data(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
+    """
+    Load OHLCV data from configured source (synthetic or Yahoo Finance).
+
+    Args:
+        universe: List of symbols to load
+        start: Start datetime
+        end: End datetime
+
+    Returns:
+        Dictionary mapping symbol to list of OHLCV bars
+    """
+    _ensure_data_dir()
+    source = settings.data.source.lower()
+
+    logger.info(
+        f"Loading market data from {source}",
+        extra={"universe": universe, "start": start.isoformat(), "end": end.isoformat(), "source": source},
+    )
+
+    if source == "yahoo":
+        return _load_data_yahoo(universe, start, end)
+    else:
+        return _load_data_synthetic(universe, start, end)
 
 
 

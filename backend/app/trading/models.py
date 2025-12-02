@@ -93,6 +93,8 @@ class CandidateResult(BaseModel):
     strategy: StrategySpec
     backtest: BacktestResult
     risk: Optional[RiskAssessment] = None
+    execution_fills: List[Fill] = Field(default_factory=list)
+    execution_error: Optional[str] = None
 
 
 class StrategyRunResponse(BaseModel):
