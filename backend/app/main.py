@@ -1,32 +1,45 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
 
-from .routes import health
+from .core.config import get_settings
+from .core.logging import configure_logging, get_logger
+from .routes import health, status, strategies
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
+settings = get_settings()
 
 app = FastAPI(
-    title="FastAPI Starter",
-    description="A minimal FastAPI starter with authentication",
-    version="1.0.0"
+    title="InvestoBot Orchestrator",
+    description="Autonomous trading orchestrator with Google Agents, backtesting, and Alpaca paper trading.",
+    version="0.1.0",
 )
 
-# CORS for local dev; restrict in production
 app.add_middleware(
     CORSMiddleware,
+    # In production you should restrict allowed origins.
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(health.router, prefix="/health", tags=["Health"]) 
+app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(strategies.router, prefix="/strategies", tags=["Strategies"])
+app.include_router(status.router, prefix="/trading", tags=["Trading Status"])
+
+
+@app.get("/status")
+async def root_status():
+    """
+    Lightweight status endpoint giving basic environment information.
+    """
+    return {
+        "app": "InvestoBot Orchestrator",
+        "environment": settings.env,
+        "debug": settings.debug,
+    }
+
+
 
 

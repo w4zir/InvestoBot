@@ -1,6 +1,7 @@
-# FastAPI + React Starter Template
+# InvestoBot – FastAPI Orchestrator + React Frontend
 
-A modern, production-ready starter template for building full-stack web applications with FastAPI (Python) backend and React (TypeScript) frontend, featuring Supabase authentication.
+InvestoBot is an autonomous trading bot MVP built on a FastAPI backend and a React (TypeScript) frontend.  
+The backend acts as an orchestrator that uses Google AI Agents to plan strategies, runs deterministic backtests, applies a risk engine, and optionally executes trades via the Alpaca paper trading API. The frontend is a Supabase-authenticated dashboard that can later be extended to visualize metrics and runs.
 
 ## Tech Stack
 
@@ -17,8 +18,9 @@ A modern, production-ready starter template for building full-stack web applicat
 ### Backend
 - **FastAPI** (Python 3.11+)
 - **Uvicorn** ASGI server
-- **Supabase Python Client** for database operations
 - **Pydantic** for data validation
+- **Google GenAI / Agents SDK** (`google-genai`) for strategy-planning agents
+- **Alpaca Paper Trading API** (via HTTP client)
 
 ### Development Tools
 - **uv** for Python virtual environment and package management
@@ -46,27 +48,37 @@ npm run setup:backend
 
 ### 2. Configure Environment Variables
 
-Create environment files (these are gitignored and won't be committed):
+Create environment files (these are gitignored and won't be committed).
 
 **Root `.env` file** (for backend):
+
 ```bash
-# Supabase Configuration
+# Optional: Supabase Configuration (if you use Supabase from backend)
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_SERVICE_KEY=your_supabase_service_role_key
+
+# Google AI Agents / GenAI
+GOOGLE_API_KEY=your_google_api_key
+GOOGLE_MODEL=gemini-2.0-flash
+# Optional, if you later create a dedicated agent
+GOOGLE_AGENT_ID=your_agent_id
+
+# Alpaca Paper Trading
+ALPACA_API_KEY=your_alpaca_paper_key
+ALPACA_SECRET_KEY=your_alpaca_paper_secret
+ALPACA_PAPER_BASE_URL=https://paper-api.alpaca.markets
+
+# Risk and data configuration (optional overrides)
+APP_ENV=dev
+APP_DEBUG=false
 ```
 
-**`frontend/.env` file** (for frontend):
+**`frontend/.env` file** (for frontend Supabase auth):
+
 ```bash
-# Supabase Configuration
 VITE_SUPABASE_URL=your_supabase_project_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
-
-**Where to find Supabase keys:**
-- Go to your Supabase project dashboard
-- Navigate to Settings → API
-- Copy the `URL` and `anon` key for frontend
-- Copy the `service_role` key for backend (keep this secret!)
 
 ### 3. Run the Application
 
@@ -90,38 +102,81 @@ npm run frontend
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
+- Health: http://localhost:8000/health/
+- Strategy run endpoint: `POST http://localhost:8000/strategies/run`
+- Trading status endpoint: `GET http://localhost:8000/trading/account`
 
 ## Project Structure
 
-```
+```text
 .
 ├── backend/
 │   ├── app/
 │   │   ├── core/
-│   │   │   └── database.py      # Supabase database client
+│   │   │   ├── config.py          # Centralized app, risk, Alpaca, Google settings
+│   │   │   ├── database.py        # (Optional) Supabase database client
+│   │   │   └── logging.py         # Logging configuration helpers
+│   │   ├── agents/
+│   │   │   ├── __init__.py
+│   │   │   ├── google_client.py   # Google GenAI / Agents client wrapper
+│   │   │   └── strategy_planner.py# Calls agent and returns StrategySpec models
+│   │   ├── trading/
+│   │   │   ├── __init__.py
+│   │   │   ├── models.py          # Strategy, backtest, risk, order models
+│   │   │   ├── market_data.py     # OHLCV data loading (synthetic placeholder)
+│   │   │   ├── backtester.py      # Deterministic backtest (placeholder)
+│   │   │   ├── risk_engine.py     # Risk checks on proposed trades
+│   │   │   ├── broker_alpaca.py   # Alpaca paper-trading adapter
+│   │   │   └── orchestrator.py    # High-level run_strategy orchestration
 │   │   ├── routes/
-│   │   │   └── health.py         # Health check endpoint
-│   │   └── main.py               # FastAPI application
-│   └── requirements.txt          # Python dependencies
+│   │   │   ├── __init__.py
+│   │   │   ├── health.py          # Health check endpoint
+│   │   │   ├── strategies.py      # /strategies/run endpoint
+│   │   │   └── status.py          # /trading/account endpoint
+│   │   └── main.py                # FastAPI application entrypoint
+│   └── requirements.txt           # Python dependencies
 ├── frontend/
 │   ├── src/
 │   │   ├── api/
-│   │   │   └── supabase.ts       # Supabase client configuration
+│   │   │   └── supabase.ts        # Supabase client configuration
 │   │   ├── components/
-│   │   │   ├── ui/               # shadcn/ui components
-│   │   │   └── Navbar.tsx        # Navigation component
+│   │   │   ├── ui/                # shadcn/ui components
+│   │   │   └── Navbar.tsx         # Navigation component
 │   │   ├── pages/
-│   │   │   ├── Login.tsx         # Authentication page
-│   │   │   ├── Dashboard.tsx     # Protected dashboard
-│   │   │   └── NotFound.tsx      # 404 page
-│   │   ├── App.tsx               # Main app component with routing
-│   │   └── main.tsx              # Entry point
+│   │   │   ├── Login.tsx          # Authentication page
+│   │   │   ├── Dashboard.tsx      # Protected dashboard
+│   │   │   └── NotFound.tsx       # 404 page
+│   │   ├── App.tsx                # Main app component with routing
+│   │   └── main.tsx               # Entry point
 │   └── package.json
 ├── scripts/
-│   ├── run-backend.js            # Backend runner script
-│   └── setup-backend.js          # Backend setup script
+│   ├── run-backend.js             # Backend runner script
+│   └── setup-backend.js           # Backend setup script
 └── README.md
 ```
+
+## Backend Architecture
+
+At a high level, the backend implements the following flow:
+
+1. **Strategy planning (LLM / Google Agent)**  
+   The `agents.strategy_planner` module uses Google GenAI (`google-genai`) to propose candidate strategy specs (`StrategySpec`) based on a mission and context.
+
+2. **Backtesting**  
+   The `trading.backtester` module runs a deterministic (currently placeholder) backtest over OHLCV data from `trading.market_data`, producing metrics such as Sharpe ratio and max drawdown.
+
+3. **Risk engine**  
+   The `trading.risk_engine` module enforces simple, deterministic rules such as per-trade notional limits and symbol blacklists.
+
+4. **Execution (optional)**  
+   If enabled in the request context, the orchestrator uses `trading.broker_alpaca` to send approved orders to the Alpaca paper trading API.
+
+5. **API surface**  
+   - `POST /strategies/run` – trigger the full pipeline (plan → backtest → risk → optional execute).  
+   - `GET /trading/account` – view Alpaca account + positions snapshot.  
+   - `GET /health/` – basic health check.
+
+This design keeps the core trading logic server-side and ready for future integration with the React dashboard or other clients.
 
 ## Features
 
