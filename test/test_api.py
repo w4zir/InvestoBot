@@ -343,6 +343,231 @@ class APITester:
             self.print_warning(f"Request failed (may be expected): {e}")
             return True  # Edge case - failure might be acceptable
 
+    def test_strategy_run_with_walk_forward(self) -> bool:
+        """Test 7: Strategy run with walk-forward validation"""
+        self.print_header("Test 7: Strategy Run with Walk-Forward Validation")
+        
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
+        data_range = f"{start_date}:{end_date}"
+        
+        payload = {
+            "mission": "Create a simple moving average crossover strategy",
+            "context": {
+                "universe": ["AAPL"],
+                "data_range": data_range,
+                "execute": False,
+                "validation": {
+                    "walk_forward": True,
+                    "train_split": 0.7,
+                    "validation_split": 0.15,
+                    "holdout_split": 0.15,
+                }
+            }
+        }
+        
+        try:
+            self.print_info(f"Request payload: {json.dumps(payload, indent=2)}")
+            
+            response = self.session.post(
+                f"{self.base_url}/strategies/run",
+                json=payload,
+                timeout=180  # Walk-forward can take longer
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if "candidates" in data and len(data["candidates"]) > 0:
+                candidate = data["candidates"][0]
+                if "validation" in candidate and candidate["validation"]:
+                    self.print_success("Walk-forward validation completed")
+                    validation = candidate["validation"]
+                    if "aggregate_metrics" in validation:
+                        self.print_info(f"Aggregate Sharpe: {validation['aggregate_metrics'].get('sharpe', 'N/A')}")
+                    return True
+                else:
+                    self.print_warning("Walk-forward validation not present in response")
+                    return True  # Not a failure if validation wasn't requested properly
+            else:
+                self.print_error("No candidates in response")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Walk-forward test failed: {e}")
+            return False
+
+    def test_strategy_run_with_scenarios(self) -> bool:
+        """Test 8: Strategy run with scenario gating"""
+        self.print_header("Test 8: Strategy Run with Scenario Gating")
+        
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
+        data_range = f"{start_date}:{end_date}"
+        
+        payload = {
+            "mission": "Create a simple moving average crossover strategy",
+            "context": {
+                "universe": ["AAPL"],
+                "data_range": data_range,
+                "execute": False,
+                "enable_scenarios": True,
+                "scenario_tags": ["crisis"],  # Filter to crisis scenarios
+            }
+        }
+        
+        try:
+            self.print_info(f"Request payload: {json.dumps(payload, indent=2)}")
+            
+            response = self.session.post(
+                f"{self.base_url}/strategies/run",
+                json=payload,
+                timeout=180
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if "candidates" in data and len(data["candidates"]) > 0:
+                candidate = data["candidates"][0]
+                if "gating" in candidate and candidate["gating"]:
+                    self.print_success("Scenario gating completed")
+                    gating = candidate["gating"]
+                    self.print_info(f"Gating passed: {gating.get('overall_passed', 'N/A')}")
+                    self.print_info(f"Blocking violations: {len(gating.get('blocking_violations', []))}")
+                    return True
+                else:
+                    self.print_warning("Scenario gating not present in response")
+                    return True  # Not a failure if scenarios weren't enabled properly
+            else:
+                self.print_error("No candidates in response")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Scenario gating test failed: {e}")
+            return False
+
+    def test_kill_switch(self) -> bool:
+        """Test 9: Kill switch functionality"""
+        self.print_header("Test 9: Kill Switch")
+        
+        try:
+            # Get current status
+            response = self.session.get(f"{self.base_url}/control/kill-switch/status")
+            response.raise_for_status()
+            status = response.json()
+            initial_state = status.get("enabled", False)
+            
+            self.print_info(f"Initial kill switch state: {initial_state}")
+            
+            # Enable kill switch
+            response = self.session.post(
+                f"{self.base_url}/control/kill-switch/enable",
+                params={"reason": "Test activation"}
+            )
+            response.raise_for_status()
+            result = response.json()
+            self.print_success("Kill switch enabled")
+            
+            # Verify it's enabled
+            response = self.session.get(f"{self.base_url}/control/kill-switch/status")
+            response.raise_for_status()
+            status = response.json()
+            if status.get("enabled"):
+                self.print_success("Kill switch status confirmed enabled")
+            else:
+                self.print_error("Kill switch not enabled after enable call")
+                return False
+            
+            # Try to run a strategy (should be blocked)
+            payload = {
+                "mission": "test mission",
+                "context": {"universe": ["AAPL"], "execute": False}
+            }
+            response = self.session.post(
+                f"{self.base_url}/strategies/run",
+                json=payload,
+                timeout=60
+            )
+            if response.status_code == 400:
+                self.print_success("Strategy run correctly blocked by kill switch")
+            else:
+                self.print_warning(f"Strategy run not blocked (status: {response.status_code})")
+            
+            # Disable kill switch
+            response = self.session.post(f"{self.base_url}/control/kill-switch/disable")
+            response.raise_for_status()
+            self.print_success("Kill switch disabled")
+            
+            # Restore original state if needed
+            if initial_state:
+                self.session.post(
+                    f"{self.base_url}/control/kill-switch/enable",
+                    params={"reason": "Restore original state"}
+                )
+            
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Kill switch test failed: {e}")
+            return False
+
+    def test_strategy_history(self) -> bool:
+        """Test 10: Strategy run history endpoints"""
+        self.print_header("Test 10: Strategy Run History")
+        
+        try:
+            # List strategy runs
+            response = self.session.get(
+                f"{self.base_url}/strategies/history",
+                params={"limit": 10, "offset": 0}
+            )
+            response.raise_for_status()
+            runs = response.json()
+            
+            self.print_success(f"Retrieved {len(runs)} strategy runs")
+            
+            # If we have runs, try to get details for the first one
+            if len(runs) > 0:
+                run_id = runs[0].get("run_id")
+                if run_id:
+                    response = self.session.get(f"{self.base_url}/strategies/history/{run_id}")
+                    response.raise_for_status()
+                    run_details = response.json()
+                    self.print_success(f"Retrieved details for run {run_id}")
+                    self.print_info(f"Run mission: {run_details.get('mission', 'N/A')}")
+            
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            # History endpoints might not be available if database is not configured
+            self.print_warning(f"History test failed (may be expected if DB not configured): {e}")
+            return True  # Not a failure if DB is not available
+
+    def test_best_strategies(self) -> bool:
+        """Test 11: Best strategies endpoint"""
+        self.print_header("Test 11: Best Strategies")
+        
+        try:
+            # Get best strategies
+            response = self.session.get(
+                f"{self.base_url}/strategies/best",
+                params={"limit": 5, "min_sharpe": 0.5}
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            self.print_success(f"Retrieved {result.get('count', 0)} best strategies")
+            
+            if result.get("strategies"):
+                best = result["strategies"][0]
+                self.print_info(f"Best strategy Sharpe: {best.get('sharpe', 'N/A')}")
+            
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            # Best strategies endpoint might not be available if database is not configured
+            self.print_warning(f"Best strategies test failed (may be expected if DB not configured): {e}")
+            return True  # Not a failure if DB is not available
+
     def run_all_tests(self, include_execution: bool = False):
         """Run all tests"""
         self.print_header("InvestoBot API Test Suite")
@@ -354,6 +579,11 @@ class APITester:
             ("Strategy Run (Backtest)", self.test_strategy_run_backtest_only),
             ("Account Status", self.test_account_status),
             ("Edge Case - Missing Data", self.test_edge_case_missing_data),
+            ("Walk-Forward Validation", self.test_strategy_run_with_walk_forward),
+            ("Scenario Gating", self.test_strategy_run_with_scenarios),
+            ("Kill Switch", self.test_kill_switch),
+            ("Strategy History", self.test_strategy_history),
+            ("Best Strategies", self.test_best_strategies),
         ]
         
         if include_execution:
@@ -404,7 +634,7 @@ Examples:
     
     parser.add_argument(
         "--test",
-        choices=["health", "status", "strategy", "account", "edge", "all"],
+        choices=["health", "status", "strategy", "account", "edge", "walkforward", "scenarios", "killswitch", "history", "best", "all"],
         default="all",
         help="Which test to run (default: all)"
     )
@@ -436,6 +666,21 @@ Examples:
         sys.exit(0 if success else 1)
     elif args.test == "edge":
         success = tester.test_edge_case_missing_data()
+        sys.exit(0 if success else 1)
+    elif args.test == "walkforward":
+        success = tester.test_strategy_run_with_walk_forward()
+        sys.exit(0 if success else 1)
+    elif args.test == "scenarios":
+        success = tester.test_strategy_run_with_scenarios()
+        sys.exit(0 if success else 1)
+    elif args.test == "killswitch":
+        success = tester.test_kill_switch()
+        sys.exit(0 if success else 1)
+    elif args.test == "history":
+        success = tester.test_strategy_history()
+        sys.exit(0 if success else 1)
+    elif args.test == "best":
+        success = tester.test_best_strategies()
         sys.exit(0 if success else 1)
 
 

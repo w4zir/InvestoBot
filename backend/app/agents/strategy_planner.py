@@ -1,7 +1,8 @@
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.trading.models import StrategySpec
 
@@ -9,6 +10,7 @@ from .google_client import get_google_agent_client
 
 
 logger = get_logger(__name__)
+settings = get_settings()
 
 
 def _extract_json_from_text(text: str) -> str:
@@ -91,7 +93,19 @@ def generate_strategy_specs(mission: str, context: Dict[str, Any]) -> List[Strat
     strategies: List[StrategySpec] = []
     for i, item in enumerate(strategies_data):
         try:
-            strategies.append(StrategySpec.model_validate(item))
+            strategy = StrategySpec.model_validate(item)
+            # Validate risk constraints
+            validation_errors = _validate_strategy_constraints(strategy)
+            if validation_errors:
+                logger.warning(
+                    "Strategy %s (%s) failed validation: %s",
+                    i,
+                    strategy.strategy_id,
+                    "; ".join(validation_errors)
+                )
+                # Try to fix common issues
+                strategy = _fix_strategy_constraints(strategy)
+            strategies.append(strategy)
         except Exception as exc:
             logger.warning(
                 "Failed to validate strategy %s from agent response: %s", i, exc
@@ -99,8 +113,142 @@ def generate_strategy_specs(mission: str, context: Dict[str, Any]) -> List[Strat
 
     if not strategies:
         raise ValueError("No valid strategies produced by agent")
+    
+    # Check strategy diversity
+    _ensure_strategy_diversity(strategies)
+    
+    logger.info(
+        "Generated %d strategies after validation",
+        len(strategies),
+        extra={"strategy_count": len(strategies)}
+    )
 
     return strategies
+
+
+def _validate_strategy_constraints(strategy: StrategySpec) -> List[str]:
+    """
+    Validate a strategy against risk constraints.
+    
+    Returns list of validation error messages (empty if valid).
+    """
+    errors: List[str] = []
+    
+    # Check position sizing fraction
+    if strategy.params.fraction is not None:
+        if strategy.params.fraction < 0.01:
+            errors.append(f"Position sizing fraction too small: {strategy.params.fraction} (minimum 0.01)")
+        elif strategy.params.fraction > 0.05:
+            errors.append(f"Position sizing fraction too large: {strategy.params.fraction} (maximum 0.05)")
+    
+    # Check for blacklisted symbols
+    blacklist = set(settings.risk.blacklist_symbols)
+    blacklisted_in_universe = [s for s in strategy.universe if s in blacklist]
+    if blacklisted_in_universe:
+        errors.append(f"Universe contains blacklisted symbols: {blacklisted_in_universe}")
+    
+    # Check universe is not empty
+    if not strategy.universe:
+        errors.append("Universe is empty")
+    
+    # Check rules are not empty
+    if not strategy.rules:
+        errors.append("Rules list is empty")
+    
+    return errors
+
+
+def _fix_strategy_constraints(strategy: StrategySpec) -> StrategySpec:
+    """
+    Attempt to fix common constraint violations in a strategy.
+    
+    Returns a corrected strategy (may be the same if no fixes needed).
+    """
+    # Fix position sizing fraction if out of bounds
+    if strategy.params.fraction is not None:
+        if strategy.params.fraction < 0.01:
+            logger.info(f"Fixing fraction {strategy.params.fraction} -> 0.01")
+            strategy.params.fraction = 0.01
+        elif strategy.params.fraction > 0.05:
+            logger.info(f"Fixing fraction {strategy.params.fraction} -> 0.05")
+            strategy.params.fraction = 0.05
+    
+    # Remove blacklisted symbols from universe
+    blacklist = set(settings.risk.blacklist_symbols)
+    original_universe = strategy.universe.copy()
+    strategy.universe = [s for s in strategy.universe if s not in blacklist]
+    if len(strategy.universe) < len(original_universe):
+        removed = set(original_universe) - set(strategy.universe)
+        logger.info(f"Removed blacklisted symbols from universe: {removed}")
+        # If universe becomes empty, add a default symbol
+        if not strategy.universe:
+            default_symbols = settings.data.default_universe
+            strategy.universe = [s for s in default_symbols if s not in blacklist][:1]
+            logger.info(f"Added default symbol to empty universe: {strategy.universe}")
+    
+    return strategy
+
+
+def _ensure_strategy_diversity(strategies: List[StrategySpec]) -> None:
+    """
+    Check strategy diversity and log warnings if strategies are too similar.
+    
+    This is a soft check - it logs warnings but doesn't remove strategies.
+    """
+    if len(strategies) < 2:
+        return
+    
+    # Check for duplicate strategy IDs
+    strategy_ids: Set[str] = set()
+    for strategy in strategies:
+        if strategy.strategy_id in strategy_ids:
+            logger.warning(f"Duplicate strategy_id found: {strategy.strategy_id}")
+        strategy_ids.add(strategy.strategy_id)
+    
+    # Check for very similar strategies (same rules, similar params)
+    for i, strategy1 in enumerate(strategies):
+        for j, strategy2 in enumerate(strategies[i+1:], start=i+1):
+            similarity = _calculate_strategy_similarity(strategy1, strategy2)
+            if similarity > 0.9:  # 90% similar
+                logger.warning(
+                    f"Strategies {strategy1.strategy_id} and {strategy2.strategy_id} "
+                    f"are very similar (similarity: {similarity:.2f})"
+                )
+
+
+def _calculate_strategy_similarity(strategy1: StrategySpec, strategy2: StrategySpec) -> float:
+    """
+    Calculate similarity score between two strategies (0.0 to 1.0).
+    
+    Simple heuristic based on:
+    - Same universe
+    - Same number of rules
+    - Same rule types and indicators
+    - Similar params
+    """
+    similarity = 0.0
+    
+    # Universe similarity
+    if set(strategy1.universe) == set(strategy2.universe):
+        similarity += 0.3
+    elif set(strategy1.universe) & set(strategy2.universe):
+        similarity += 0.15
+    
+    # Rules similarity
+    if len(strategy1.rules) == len(strategy2.rules):
+        similarity += 0.2
+        # Check if rule types match
+        rule_types1 = [r.type for r in strategy1.rules]
+        rule_types2 = [r.type for r in strategy2.rules]
+        if rule_types1 == rule_types2:
+            similarity += 0.3
+            # Check indicators
+            indicators1 = [r.indicator for r in strategy1.rules]
+            indicators2 = [r.indicator for r in strategy2.rules]
+            if indicators1 == indicators2:
+                similarity += 0.2
+    
+    return min(similarity, 1.0)
 
 
 

@@ -1,7 +1,9 @@
+import json
 from typing import Any, Dict
 
 from google import genai  # type: ignore[import]
 
+from app.agents.strategy_templates import get_template_registry
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
@@ -37,15 +39,21 @@ class GoogleAgentClient:
         """
         logger.info("Calling Google Agent for strategy planning", extra={"mission": mission})
 
-        prompt = (
-            "You are an investment strategy planner. "
-            "You MUST output ONLY a valid JSON object (no markdown, no code blocks, no explanations). "
-            "The JSON must contain an array 'strategies', where each strategy has: "
-            "strategy_id (string), name (optional string), description (optional string), "
-            "universe (array of strings), rules (array of objects with type, indicator, params), "
-            "and params (object with position_sizing, fraction, timeframe). "
-            "Example format: {\"strategies\": [{\"strategy_id\": \"sma_cross_1\", \"name\": \"SMA Crossover\", \"universe\": [\"AAPL\"], \"rules\": [{\"type\": \"entry\", \"indicator\": \"sma_cross\", \"params\": {\"fast\": 20, \"slow\": 50}}], \"params\": {\"position_sizing\": \"fixed_fraction\", \"fraction\": 0.02, \"timeframe\": \"1d\"}}]}"
-        )
+        # Get template examples for few-shot learning
+        template_registry = get_template_registry()
+        template_examples = template_registry.get_template_examples()
+        
+        # Build risk constraints section
+        risk_constraints = self._build_risk_constraints_section()
+        
+        # Build template reference section
+        template_section = self._build_template_section(template_examples)
+        
+        # Build few-shot examples section
+        examples_section = self._build_examples_section(template_examples)
+        
+        # Build the complete prompt
+        prompt = self._build_enhanced_prompt(risk_constraints, template_section, examples_section)
 
         try:
             response = self._client.models.generate_content(
@@ -93,6 +101,98 @@ class GoogleAgentClient:
 
         # Delegate JSON parsing to the strategy planner, which knows the schema.
         return {"raw_text": text}
+    
+    def _build_risk_constraints_section(self) -> str:
+        """Build the risk constraints section of the prompt."""
+        blacklist_str = ", ".join(settings.risk.blacklist_symbols) if settings.risk.blacklist_symbols else "none"
+        
+        return f"""
+=== RISK CONSTRAINTS (MUST BE RESPECTED) ===
+
+1. Position Sizing:
+   - Use "fixed_fraction" position sizing
+   - Fraction MUST be between 0.01 (1%) and 0.05 (5%) per trade
+   - Recommended: 0.02 (2%) for most strategies
+   - For intraday strategies, use smaller fractions (0.01-0.02)
+
+2. Trade Notional Limits:
+   - Maximum trade notional: ${settings.risk.max_trade_notional:,.2f}
+   - Maximum portfolio exposure per symbol: {settings.risk.max_portfolio_exposure:.0%}
+   - Calculate notional = quantity * price, ensure it stays within limits
+
+3. Blacklisted Symbols (DO NOT USE):
+   - {blacklist_str if blacklist_str != "none" else "No blacklisted symbols"}
+
+4. Strategy Diversity:
+   - Generate diverse strategies (different types, timeframes, indicators)
+   - Avoid duplicate strategies with only minor parameter differences
+   - Mix different strategy types when possible (momentum, mean-reversion, breakout)
+"""
+    
+    def _build_template_section(self, template_examples: list) -> str:
+        """Build the template reference section."""
+        if not template_examples:
+            return ""
+        
+        section = "\n=== STRATEGY TEMPLATES (OPTIONAL REFERENCE) ===\n"
+        section += "You can use these templates as inspiration or generate custom strategies.\n\n"
+        
+        for example in template_examples:
+            section += f"Template: {example['template_name']} ({example['template_id']})\n"
+            section += f"Description: {example['description']}\n"
+            section += f"Example strategy structure:\n"
+            section += json.dumps(example['example_strategy'], indent=2)
+            section += "\n\n"
+        
+        return section
+    
+    def _build_examples_section(self, template_examples: list) -> str:
+        """Build the few-shot examples section."""
+        if not template_examples:
+            return ""
+        
+        section = "\n=== FEW-SHOT EXAMPLES ===\n"
+        section += "Here are example strategy instantiations:\n\n"
+        
+        # Include 1-2 example strategies from templates
+        for example in template_examples[:2]:
+            section += f"Example {example['template_name']}:\n"
+            section += json.dumps({"strategies": [example['example_strategy']]}, indent=2)
+            section += "\n\n"
+        
+        return section
+    
+    def _build_enhanced_prompt(self, risk_constraints: str, template_section: str, examples_section: str) -> str:
+        """Build the complete enhanced prompt."""
+        base_prompt = """You are an investment strategy planner. You MUST output ONLY a valid JSON object (no markdown, no code blocks, no explanations).
+
+The JSON must contain an array 'strategies', where each strategy has:
+- strategy_id (string, unique identifier)
+- name (optional string, descriptive name)
+- description (optional string, what the strategy does)
+- universe (array of strings, stock symbols to trade)
+- rules (array of objects with: type ["entry"|"exit"], indicator (string), params (object))
+- params (object with: position_sizing ["fixed_fraction"], fraction (float 0.01-0.05), timeframe (string like "1d", "1h"))
+
+OUTPUT FORMAT:
+{
+  "strategies": [
+    {
+      "strategy_id": "unique_id",
+      "name": "Strategy Name",
+      "description": "What it does",
+      "universe": ["AAPL", "MSFT"],
+      "rules": [
+        {"type": "entry", "indicator": "sma_cross", "params": {"fast": 20, "slow": 50}},
+        {"type": "exit", "indicator": "sma_cross", "params": {"fast": 20, "slow": 50, "reverse": true}}
+      ],
+      "params": {"position_sizing": "fixed_fraction", "fraction": 0.02, "timeframe": "1d"}
+    }
+  ]
+}
+"""
+        
+        return base_prompt + risk_constraints + template_section + examples_section
 
 
 _client_instance: GoogleAgentClient | None = None

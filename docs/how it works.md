@@ -73,6 +73,7 @@ Key endpoints:
 
 With the backend running and `GOOGLE_API_KEY` configured:
 
+**Basic strategy run:**
 ```bash
 curl -X POST http://localhost:8000/strategies/run \
   -H "Content-Type: application/json" \
@@ -82,6 +83,42 @@ curl -X POST http://localhost:8000/strategies/run \
           "universe": ["AAPL"],
           "data_range": "2023-01-01:2023-06-30",
           "execute": false
+        }
+      }' | jq .
+```
+
+**With walk-forward validation:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "deploy a simple SMA crossover strategy for AAPL",
+        "context": {
+          "universe": ["AAPL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false,
+          "validation": {
+            "walk_forward": true,
+            "train_split": 0.7,
+            "validation_split": 0.15,
+            "holdout_split": 0.15
+          }
+        }
+      }' | jq .
+```
+
+**With scenario gating:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "deploy a simple SMA crossover strategy for AAPL",
+        "context": {
+          "universe": ["AAPL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false,
+          "enable_scenarios": true,
+          "scenario_tags": ["crisis"]
         }
       }' | jq .
 ```
@@ -135,7 +172,9 @@ You should see a JSON response similar to:
         "violations": []
       },
       "execution_fills": [],
-      "execution_error": "Execution blocked: dev environment without ALLOW_EXECUTE flag"
+      "execution_error": "Execution blocked: dev environment without ALLOW_EXECUTE flag",
+      "validation": null,
+      "gating": null
     }
   ],
   "created_at": "2024-12-30T12:00:00Z"
@@ -145,6 +184,8 @@ You should see a JSON response similar to:
 Notes:
 - **If `DATA_SOURCE=synthetic`**, prices are generated; metrics are for pipeline sanity, not real P&L.
 - **If `DATA_SOURCE=yahoo`**, OHLCV is loaded from Yahoo Finance via `yfinance` (must be installed).
+- **`validation`** field contains walk-forward validation results if enabled (see section 2.9).
+- **`gating`** field contains scenario gating results if enabled (see section 2.10).
 
 ### 1.5 Enabling real paper execution (careful!)
 
@@ -522,22 +563,129 @@ The orchestrator:
   - `context.execute` is true **and**
   - The environment allows it (`ALLOW_EXECUTE` or non-dev).
 
-### 2.8 Response assembly
+### 2.8 Walk-forward validation (optional)
+
+If `context.validation.walk_forward=true` or `context.validation.train_split > 0`, the orchestrator runs walk-forward validation via `backend/app/trading/validation.py`:
+
+```133:151:backend/app/trading/orchestrator.py
+        # Run walk-forward validation if enabled
+        walk_forward_result: Optional[WalkForwardResult] = None
+        if validation_config.walk_forward or validation_config.train_split > 0:
+            logger.info(f"Running walk-forward validation for strategy {spec.strategy_id}")
+            try:
+                walk_forward_result = run_walk_forward_backtest(bt_request, ohlcv, validation_config)
+                # Use the aggregate metrics from walk-forward as the primary backtest result
+                from app.trading.models import BacktestResult
+                backtest_result = BacktestResult(
+                    strategy=spec,
+                    metrics=walk_forward_result.aggregate_metrics,
+                    trade_log=walk_forward_result.windows[0].trade_log if walk_forward_result.windows else [],
+                )
+            except Exception as e:
+                logger.error(f"Walk-forward validation failed for strategy {spec.strategy_id}: {e}", exc_info=True)
+                # Fall back to regular backtest
+                backtest_result = run_backtest(bt_request, ohlcv_data=ohlcv)
+        else:
+            backtest_result = run_backtest(bt_request, ohlcv_data=ohlcv)
+```
+
+Walk-forward validation:
+- Splits data into train/validation/holdout sets (if `train_split > 0`).
+- Generates rolling or expanding windows for time-series cross-validation (if `walk_forward=true`).
+- Aggregates metrics across all windows for robust performance estimates.
+- Results appear in `candidate.validation` as a `WalkForwardResult` with `aggregate_metrics`, `train_metrics`, `validation_metrics`, and `holdout_metrics`.
+
+### 2.9 Scenario gating (optional)
+
+If `context.enable_scenarios=true`, the orchestrator evaluates strategies against predefined crisis scenarios via `backend/app/trading/scenarios.py`:
+
+```153:169:backend/app/trading/orchestrator.py
+        # Run scenario evaluation and gating if enabled
+        gating_result: Optional[GatingResult] = None
+        if enable_scenarios:
+            logger.info(f"Running scenario evaluation for strategy {spec.strategy_id}")
+            try:
+                scenarios = list_scenarios(tags=scenario_tags) if scenario_tags else list_scenarios()
+                if scenarios:
+                    gating_result = evaluate_gates(bt_request, scenarios, ohlcv)
+                    logger.info(
+                        f"Scenario gating for strategy {spec.strategy_id}: passed={gating_result.overall_passed}, "
+                        f"violations={len(gating_result.blocking_violations)}"
+                    )
+                else:
+                    logger.warning("No scenarios found for evaluation")
+            except Exception as e:
+                logger.error(f"Scenario evaluation failed for strategy {spec.strategy_id}: {e}", exc_info=True)
+```
+
+Scenario gating:
+- Evaluates strategies on historical crisis periods (2008 financial crisis, 2020 COVID, etc.).
+- Applies gating rules (e.g., Sharpe > 0.5, max drawdown < 0.3) to each scenario.
+- Blocks execution if `gating_result.overall_passed=false` unless `context.gating_override=true`.
+- Results appear in `candidate.gating` as a `GatingResult` with `overall_passed`, `blocking_violations`, and per-scenario results.
+
+### 2.10 Kill switch
+
+Before any strategy execution, the orchestrator checks the kill switch:
+
+```71:75:backend/app/trading/orchestrator.py
+    # Check kill switch before proceeding
+    if is_kill_switch_enabled():
+        error_msg = "Strategy execution blocked: kill switch is enabled"
+        logger.warning(error_msg, extra={"mission": payload.mission})
+        raise ValueError(error_msg)
+```
+
+The kill switch is managed via `backend/app/routes/control.py`:
+- `POST /control/kill-switch/enable` – Enable kill switch (blocks all strategy runs).
+- `POST /control/kill-switch/disable` – Disable kill switch.
+- `GET /control/kill-switch/status` – Get current kill switch status.
+
+When enabled, all strategy runs are blocked at the orchestrator entry point, preventing any backtesting or execution.
+
+### 2.11 Persistence and repository
+
+After generating results, the orchestrator attempts to persist them to the database (non-blocking):
+
+```249:260:backend/app/trading/orchestrator.py
+    # Persist to database (non-blocking - failures are logged but don't fail the run)
+    try:
+        with LogContext(run_id=run_id, mission=mission):
+            logger.info("Persisting strategy run to database", extra={"run_id": run_id, "candidate_count": len(candidates)})
+            success = _repository.save_strategy_run(response, context)
+            if success:
+                logger.info("Successfully persisted strategy run", extra={"run_id": run_id})
+            else:
+                logger.warning("Failed to persist strategy run (database may be unavailable)", extra={"run_id": run_id})
+    except Exception as e:
+        # Log but don't fail the run if persistence fails
+        logger.error(f"Error persisting strategy run: {e}", exc_info=True, extra={"run_id": run_id})
+```
+
+Persistence is handled by:
+- `backend/app/core/repository.py` – `RunRepository` saves strategy runs, backtests, trades, risk violations, and execution fills.
+- `backend/app/trading/persistence.py` – `PersistenceService` provides query operations (list runs, get run details, get best strategies).
+
+If Supabase is unavailable, persistence fails gracefully without affecting the strategy run.
+
+### 2.12 Response assembly
 
 Each candidate is summarized as:
 
-```96:115:backend/app/trading/models.py
+```114:122:backend/app/trading/models.py
 class CandidateResult(BaseModel):
     strategy: StrategySpec
     backtest: BacktestResult
     risk: Optional[RiskAssessment] = None
     execution_fills: List[Fill] = Field(default_factory=list)
     execution_error: Optional[str] = None
+    validation: Optional[WalkForwardResult] = None
+    gating: Optional[GatingResult] = None
 ```
 
 The top-level response:
 
-```118:125:backend/app/trading/models.py
+```124:129:backend/app/trading/models.py
 class StrategyRunResponse(BaseModel):
     run_id: str
     mission: str
@@ -553,6 +701,7 @@ This is exactly what you see as the JSON from `/strategies/run`.
 
 Key safety levers:
 
+- **Kill switch** – `POST /control/kill-switch/enable` blocks all strategy runs immediately.
 - `APP_ENV` – environment label (e.g., `dev`, `staging`, `prod`).
 - `ALLOW_EXECUTE` – when `false` in `dev`, execution is blocked even if `context.execute=true`.
 - Alpaca credentials – using paper keys and `ALPACA_PAPER_BASE_URL` ensures no real money is touched.
@@ -560,13 +709,17 @@ Key safety levers:
   - `max_trade_notional`
   - `max_portfolio_exposure`
   - `blacklist_symbols`
+- **Scenario gating** – strategies must pass crisis scenario tests (unless `gating_override=true`).
 
 Execution only happens when:
 
-1. Strategies are generated and validated.
-2. Backtests run successfully.
-3. Risk checks approve at least one order.
-4. Environment and flags permit execution.
+1. Kill switch is disabled.
+2. Strategies are generated and validated.
+3. Backtests run successfully.
+4. Walk-forward validation passes (if enabled).
+5. Scenario gating passes (if enabled, unless overridden).
+6. Risk checks approve at least one order.
+7. Environment and flags permit execution.
 
 ---
 
@@ -599,18 +752,21 @@ Execution only happens when:
 ### 4.2 Next steps and improvements
 
 - **Backtesting & evaluation**
-  - Support multi-symbol portfolios and position rebalancing.
-  - Add walk-forward validation and train/validation/holdout splits.
-  - Implement golden dataset scenarios (e.g., 2008 crisis, 2020 COVID shock) and automated gating.
+  - ✅ Walk-forward validation and train/validation/holdout splits (implemented).
+  - ✅ Golden dataset scenarios (2008 crisis, 2020 COVID, 2022 bear market) and automated gating (implemented).
   - Add Monte Carlo resampling of returns / parameter robustness.
+  - Support more scenario types (bull markets, sideways markets, sector-specific events).
 
 - **Strategy & planner**
-  - Add more strategy templates (volatility breakout, pairs trading, intraday mean-reversion).
+  - ✅ Strategy templates (volatility breakout, pairs trading, intraday mean-reversion) (implemented).
+  - ✅ Strategy validation and constraint fixing (implemented).
+  - ✅ Strategy diversity checking (implemented).
+  - ✅ Persist strategies and results to a DB for history and reuse (implemented).
   - Improve prompts and constraints for the planner to better respect risk/constraints.
-  - Persist strategies and results to a DB for history and reuse.
 
 - **Observability & storage**
-  - Store run results (metrics, trades, risk violations, fills) in a database.
+  - ✅ Store run results (metrics, trades, risk violations, fills) in a database (implemented).
+  - ✅ Query endpoints for run history and best strategies (implemented).
   - Add structured logging sinks and basic dashboards (e.g., Grafana, OpenTelemetry).
 
 - **UI & UX**
@@ -620,8 +776,9 @@ Execution only happens when:
     - Show live Alpaca paper positions and P&L.
 
 - **Scheduling & automation**
-  - Add a scheduler (cron/APS) to run strategies periodically or on market open/close.
-  - Implement guardrails and manual overrides (kill switch, cancel-all endpoint).
+  - ✅ Kill switch and cancel-all endpoint (implemented).
+  - ✅ Scheduler utilities for market hours detection (implemented).
+  - Add automated scheduling (cron/APS) to run strategies periodically or on market open/close.
 
 - **Production hardening**
   - Secrets management (e.g., GCP Secret Manager, AWS Secrets Manager).

@@ -4,7 +4,9 @@ from typing import Dict, List, Optional
 
 from app.agents.strategy_planner import generate_strategy_specs
 from app.core.config import get_settings
-from app.core.logging import get_logger
+from app.core.logging import add_log_context, get_logger, LogContext
+from app.core.repository import RunRepository
+from app.routes.control import is_kill_switch_enabled
 from app.trading import market_data
 from app.trading.backtester import run_backtest
 from app.trading.broker_alpaca import get_alpaca_broker
@@ -12,17 +14,25 @@ from app.trading.models import (
     BacktestRequest,
     CandidateResult,
     Fill,
+    GatingResult,
     PortfolioState,
     StrategyRunRequest,
     StrategyRunResponse,
     StrategySpec,
+    ValidationConfig,
+    WalkForwardResult,
 )
 from app.trading.order_generator import generate_orders
 from app.trading.risk_engine import risk_assess
+from app.trading.scenarios import evaluate_gates, list_scenarios
+from app.trading.validation import run_walk_forward_backtest
 
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# Initialize repository for persistence
+_repository = RunRepository()
 
 
 def _default_date_range() -> str:
@@ -58,15 +68,25 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
     - Backtest each candidate.
     - Apply risk engine and optionally execute via Alpaca.
     """
+    # Check kill switch before proceeding
+    if is_kill_switch_enabled():
+        error_msg = "Strategy execution blocked: kill switch is enabled"
+        logger.warning(error_msg, extra={"mission": payload.mission})
+        raise ValueError(error_msg)
+    
     mission = payload.mission
     context = payload.context
 
     universe = context.get("universe") or settings.data.default_universe
     data_range = context.get("data_range") or _default_date_range()
 
+    # Add log context for the run
+    run_id = f"run_{int(datetime.utcnow().timestamp())}"
+    add_log_context("run_id", run_id)
+    
     logger.info(
         "Starting strategy run",
-        extra={"mission": mission, "universe": universe, "data_range": data_range},
+        extra={"mission": mission, "universe": universe, "data_range": data_range, "run_id": run_id},
     )
 
     strategies: List[StrategySpec] = generate_strategy_specs(mission=mission, context=context)
@@ -93,6 +113,15 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
         if bars:
             latest_prices[symbol] = bars[-1]["close"]
 
+    # Extract validation and scenario configuration from context
+    validation_config_dict = context.get("validation", {})
+    validation_config = ValidationConfig(**validation_config_dict) if validation_config_dict else ValidationConfig()
+    
+    # Get scenario configuration
+    enable_scenarios = context.get("enable_scenarios", False)
+    scenario_tags = context.get("scenario_tags", None)  # Optional filter by tags
+    gating_override = context.get("gating_override", False)  # Override gating failures
+
     candidates: List[CandidateResult] = []
     for spec in strategies:
         bt_request = BacktestRequest(
@@ -100,7 +129,43 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
             data_range=data_range,
             costs={"commission": 0.001, "slippage_pct": 0.0005},
         )
-        backtest_result = run_backtest(bt_request, ohlcv_data=ohlcv)
+
+        # Run walk-forward validation if enabled
+        walk_forward_result: Optional[WalkForwardResult] = None
+        if validation_config.walk_forward or validation_config.train_split > 0:
+            logger.info(f"Running walk-forward validation for strategy {spec.strategy_id}")
+            try:
+                walk_forward_result = run_walk_forward_backtest(bt_request, ohlcv, validation_config)
+                # Use the aggregate metrics from walk-forward as the primary backtest result
+                from app.trading.models import BacktestResult
+                backtest_result = BacktestResult(
+                    strategy=spec,
+                    metrics=walk_forward_result.aggregate_metrics,
+                    trade_log=walk_forward_result.windows[0].trade_log if walk_forward_result.windows else [],
+                )
+            except Exception as e:
+                logger.error(f"Walk-forward validation failed for strategy {spec.strategy_id}: {e}", exc_info=True)
+                # Fall back to regular backtest
+                backtest_result = run_backtest(bt_request, ohlcv_data=ohlcv)
+        else:
+            backtest_result = run_backtest(bt_request, ohlcv_data=ohlcv)
+
+        # Run scenario evaluation and gating if enabled
+        gating_result: Optional[GatingResult] = None
+        if enable_scenarios:
+            logger.info(f"Running scenario evaluation for strategy {spec.strategy_id}")
+            try:
+                scenarios = list_scenarios(tags=scenario_tags) if scenario_tags else list_scenarios()
+                if scenarios:
+                    gating_result = evaluate_gates(bt_request, scenarios, ohlcv)
+                    logger.info(
+                        f"Scenario gating for strategy {spec.strategy_id}: passed={gating_result.overall_passed}, "
+                        f"violations={len(gating_result.blocking_violations)}"
+                    )
+                else:
+                    logger.warning("No scenarios found for evaluation")
+            except Exception as e:
+                logger.error(f"Scenario evaluation failed for strategy {spec.strategy_id}: {e}", exc_info=True)
 
         # Generate orders from strategy and backtest results
         proposed_orders = generate_orders(
@@ -125,10 +190,25 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
             },
         )
 
+        # Check gating before execution
+        execution_blocked = False
+        execution_error: Optional[str] = None
+        if gating_result and not gating_result.overall_passed:
+            if not gating_override:
+                execution_blocked = True
+                execution_error = f"Execution blocked by gating rules: {', '.join(gating_result.blocking_violations[:3])}"
+                logger.warning(
+                    f"Execution blocked for strategy {spec.strategy_id} due to gating violations",
+                    extra={"violations": gating_result.blocking_violations},
+                )
+            else:
+                logger.warning(
+                    f"Gating failed for strategy {spec.strategy_id} but execution allowed due to override flag"
+                )
+
         # Execute orders if enabled and approved
         fills: List[Fill] = []
-        execution_error: Optional[str] = None
-        if should_execute and assessment.approved_trades:
+        if should_execute and assessment.approved_trades and not execution_blocked:
             # Safety check: only execute in non-dev environments or with explicit flag
             allow_execute = settings.env != "dev" or os.getenv("ALLOW_EXECUTE", "false").lower() == "true"
             if not allow_execute:
@@ -153,16 +233,33 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                 risk=assessment,
                 execution_fills=fills,
                 execution_error=execution_error,
+                validation=walk_forward_result,
+                gating=gating_result,
             )
         )
 
-    run_id = f"run_{int(datetime.utcnow().timestamp())}"
-    return StrategyRunResponse(
+    # Create response (run_id was set earlier)
+    response = StrategyRunResponse(
         run_id=run_id,
         mission=mission,
         candidates=candidates,
         created_at=datetime.utcnow(),
     )
+    
+    # Persist to database (non-blocking - failures are logged but don't fail the run)
+    try:
+        with LogContext(run_id=run_id, mission=mission):
+            logger.info("Persisting strategy run to database", extra={"run_id": run_id, "candidate_count": len(candidates)})
+            success = _repository.save_strategy_run(response, context)
+            if success:
+                logger.info("Successfully persisted strategy run", extra={"run_id": run_id})
+            else:
+                logger.warning("Failed to persist strategy run (database may be unavailable)", extra={"run_id": run_id})
+    except Exception as e:
+        # Log but don't fail the run if persistence fails
+        logger.error(f"Error persisting strategy run: {e}", exc_info=True, extra={"run_id": run_id})
+    
+    return response
 
 
 

@@ -23,6 +23,7 @@ def generate_orders(
 
     This function translates strategy signals (from backtest trade log) into
     concrete Order objects using position sizing rules from StrategyParams.
+    Supports both per-symbol and portfolio-level evaluation modes.
 
     Args:
         strategy: The strategy specification with rules and parameters

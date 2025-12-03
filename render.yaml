@@ -1,0 +1,93 @@
+# Render.com deployment configuration for InvestoBot
+#
+# This file defines the services to deploy on Render.com:
+# 1. Web service for the FastAPI API
+# 2. Cron jobs for scheduled strategy runs (market open/close)
+#
+# To deploy:
+# 1. Connect your GitHub repo to Render.com
+# 2. Render will automatically detect this render.yaml file
+# 3. Or manually create services using the settings below
+
+services:
+  # Main API web service
+  - type: web
+    name: investobot-api
+    env: python
+    region: oregon  # or your preferred region
+    plan: starter  # or free, starter, standard, pro
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      # Add your other environment variables in Render dashboard:
+      # - GOOGLE_API_KEY
+      # - ALPACA_API_KEY
+      # - ALPACA_SECRET_KEY
+      # - ALPACA_PAPER_BASE_URL
+      # - DATA_SOURCE
+      # - etc.
+
+  # Cron job for market open (9:30 AM ET on weekdays)
+  # Note: Render cron jobs run in UTC, so 9:30 AM ET = 13:30 UTC (or 14:30 during DST)
+  # Adjust the schedule based on your timezone needs
+  - type: cron
+    name: investobot-market-open
+    schedule: "30 13 * * 1-5"  # 1:30 PM UTC = 9:30 AM ET (adjust for DST)
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && python scripts/scheduled_run.py
+    envVars:
+      - key: SCHEDULED_MISSION
+        value: "deploy strategies at market open"
+      - key: SCHEDULED_UNIVERSE
+        value: "AAPL,MSFT,GOOGL,AMZN,META,TSLA"
+      - key: SCHEDULED_EXECUTE
+        value: "false"  # Set to "true" for paper trading execution
+      # Inherit other env vars from the web service or set them here:
+      # - GOOGLE_API_KEY
+      # - ALPACA_API_KEY
+      # - etc.
+
+  # Cron job for market close (4:00 PM ET on weekdays)
+  # 4:00 PM ET = 20:00 UTC (or 21:00 during DST)
+  - type: cron
+    name: investobot-market-close
+    schedule: "0 20 * * 1-5"  # 8:00 PM UTC = 4:00 PM ET (adjust for DST)
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && python scripts/scheduled_run.py
+    envVars:
+      - key: SCHEDULED_MISSION
+        value: "close positions and rebalance at market close"
+      - key: SCHEDULED_UNIVERSE
+        value: "AAPL,MSFT,GOOGL,AMZN,META,TSLA"
+      - key: SCHEDULED_EXECUTE
+        value: "false"  # Set to "true" for paper trading execution
+      # Inherit other env vars from the web service or set them here
+
+  # Optional: Periodic hourly run (for testing or continuous monitoring)
+  # Uncomment if you want hourly strategy runs
+  # - type: cron
+  #   name: investobot-hourly
+  #   schedule: "0 * * * *"  # Every hour
+  #   env: python
+  #   region: oregon
+  #   plan: starter
+  #   buildCommand: cd backend && pip install -r requirements.txt
+  #   startCommand: cd backend && python scripts/scheduled_run.py
+  #   envVars:
+  #     - key: SCHEDULED_MISSION
+  #       value: "periodic strategy evaluation"
+  #     - key: SCHEDULED_UNIVERSE
+  #       value: "AAPL,MSFT,GOOGL"
+  #     - key: SCHEDULED_EXECUTE
+  #       value: "false"
+

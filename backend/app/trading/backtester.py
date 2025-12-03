@@ -4,14 +4,22 @@ Backtesting engine for trading strategies.
 Implements an event-driven backtest that evaluates strategy rules on historical
 OHLCV data and generates trade logs with realistic metrics.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from app.core.logging import get_logger
 from app.trading.indicators import evaluate_indicator, sma
-from app.trading.models import BacktestMetrics, BacktestRequest, BacktestResult, Trade
+from app.trading.models import (
+    BacktestMetrics,
+    BacktestRequest,
+    BacktestResult,
+    EquityPoint,
+    PortfolioEvaluationMode,
+    RebalancingMode,
+    Trade,
+)
 
 logger = get_logger(__name__)
 
@@ -172,6 +180,49 @@ def _evaluate_strategy_rule(rule_type: str, indicator: str, params: Dict, prices
         return False
 
 
+def _parse_rebalancing_frequency(frequency: str) -> timedelta:
+    """Parse rebalancing frequency string (e.g., '1d', '1w') into timedelta."""
+    if not frequency:
+        return timedelta(days=1)
+    
+    frequency = frequency.lower().strip()
+    if frequency.endswith('d'):
+        days = int(frequency[:-1])
+        return timedelta(days=days)
+    elif frequency.endswith('w'):
+        weeks = int(frequency[:-1])
+        return timedelta(weeks=weeks)
+    elif frequency.endswith('m'):
+        months = int(frequency[:-1])
+        return timedelta(days=months * 30)  # Approximate
+    else:
+        return timedelta(days=1)
+
+
+def _should_rebalance(
+    rebalancing_mode: RebalancingMode,
+    last_rebalance_time: Optional[datetime],
+    current_time: datetime,
+    rebalancing_frequency: Optional[str],
+    has_signal_change: bool,
+) -> bool:
+    """Determine if portfolio should be rebalanced."""
+    if rebalancing_mode == RebalancingMode.SIGNAL_BASED:
+        return has_signal_change
+    elif rebalancing_mode == RebalancingMode.TIME_BASED:
+        if not last_rebalance_time or not rebalancing_frequency:
+            return True  # First rebalance
+        frequency_delta = _parse_rebalancing_frequency(rebalancing_frequency)
+        return (current_time - last_rebalance_time) >= frequency_delta
+    elif rebalancing_mode == RebalancingMode.BOTH:
+        time_based = False
+        if last_rebalance_time and rebalancing_frequency:
+            frequency_delta = _parse_rebalancing_frequency(rebalancing_frequency)
+            time_based = (current_time - last_rebalance_time) >= frequency_delta
+        return time_based or has_signal_change
+    return False
+
+
 def _evaluate_strategy_rules(strategy_rules: List, prices: List[float], current_idx: int, filter_type: Optional[str] = None) -> bool:
     """
     Evaluate strategy rules (AND logic - all must be true).
@@ -209,9 +260,137 @@ def _evaluate_strategy_rules(strategy_rules: List, prices: List[float], current_
     return True
 
 
+def _create_unified_timeline(ohlcv_data: Dict[str, List[Dict]]) -> List[Tuple[datetime, str, int]]:
+    """
+    Create a unified timeline of all events across all symbols.
+    
+    Returns:
+        List of (timestamp, symbol, bar_index) tuples sorted by timestamp
+    """
+    timeline = []
+    for symbol, bars in ohlcv_data.items():
+        for idx, bar in enumerate(bars):
+            timestamp = bar["timestamp"]
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            timeline.append((timestamp, symbol, idx))
+    
+    # Sort by timestamp
+    timeline.sort(key=lambda x: x[0])
+    return timeline
+
+
+def _get_price_at_index(symbol: str, idx: int, ohlcv_data: Dict[str, List[Dict]]) -> Optional[float]:
+    """Get price at a specific index for a symbol."""
+    bars = ohlcv_data.get(symbol, [])
+    if 0 <= idx < len(bars):
+        return bars[idx]["close"]
+    return None
+
+
+def _rebalance_portfolio(
+    portfolio_value: float,
+    positions: Dict[str, Dict[str, float]],
+    target_allocations: Dict[str, float],
+    current_prices: Dict[str, float],
+    cash: float,
+    commission_rate: float,
+    slippage_pct: float,
+    current_timestamp: datetime,
+) -> Tuple[float, List[Trade]]:
+    """
+    Rebalance portfolio to target allocations.
+    
+    Returns:
+        Tuple of (new_cash, list_of_trades)
+    """
+    trades: List[Trade] = []
+    new_cash = cash
+    
+    # Calculate current allocations
+    current_values: Dict[str, float] = {}
+    for symbol, pos_info in positions.items():
+        if symbol in current_prices:
+            current_values[symbol] = pos_info["quantity"] * current_prices[symbol]
+    
+    # Calculate target values
+    target_values: Dict[str, float] = {}
+    for symbol, allocation in target_allocations.items():
+        if symbol in current_prices:
+            target_values[symbol] = portfolio_value * allocation
+    
+    # Generate rebalancing trades
+    for symbol in set(list(positions.keys()) + list(target_allocations.keys())):
+        current_qty = positions.get(symbol, {}).get("quantity", 0.0)
+        current_value = current_values.get(symbol, 0.0)
+        target_value = target_values.get(symbol, 0.0)
+        price = current_prices.get(symbol, 0.0)
+        
+        if price <= 0:
+            continue
+        
+        target_qty = target_value / price if target_value > 0 else 0.0
+        qty_diff = target_qty - current_qty
+        
+        if abs(qty_diff) < 0.01:  # Skip dust
+            continue
+        
+        if qty_diff > 0:
+            # Buy
+            fill_price = price * (1 + slippage_pct)
+            cost = qty_diff * fill_price
+            commission = cost * commission_rate
+            total_cost = cost + commission
+            
+            if new_cash >= total_cost:
+                new_cash -= total_cost
+                current_qty = positions.get(symbol, {}).get("quantity", 0.0)
+                positions[symbol] = {
+                    "quantity": current_qty + qty_diff,
+                    "entry_price": fill_price,
+                    "entry_idx": -1,  # Rebalance doesn't track entry_idx
+                }
+                trades.append(
+                    Trade(
+                        timestamp=current_timestamp,
+                        symbol=symbol,
+                        side="buy",
+                        quantity=qty_diff,
+                        price=fill_price,
+                    )
+                )
+        else:
+            # Sell
+            qty_to_sell = abs(qty_diff)
+            fill_price = price * (1 - slippage_pct)
+            proceeds = qty_to_sell * fill_price
+            commission = proceeds * commission_rate
+            net_proceeds = proceeds - commission
+            
+            new_cash += net_proceeds
+            current_qty = positions.get(symbol, {}).get("quantity", 0.0)
+            positions[symbol] = {
+                "quantity": max(0.0, current_qty - qty_to_sell),
+                "entry_price": positions.get(symbol, {}).get("entry_price", fill_price),
+                "entry_idx": positions.get(symbol, {}).get("entry_idx", -1),
+            }
+            trades.append(
+                Trade(
+                    timestamp=current_timestamp,
+                    symbol=symbol,
+                    side="sell",
+                    quantity=qty_to_sell,
+                    price=fill_price,
+                )
+            )
+    
+    return new_cash, trades
+
+
 def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[Dict]]] = None) -> BacktestResult:
     """
     Run a backtest on a strategy using historical OHLCV data.
+    Supports multi-symbol portfolios with configurable evaluation modes and rebalancing.
 
     Args:
         request: BacktestRequest with strategy, data_range, and costs
@@ -243,169 +422,430 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
     # Initialize backtest state
     initial_cash = 100_000.0
     cash = initial_cash
-    positions: Dict[str, float] = {}  # symbol -> quantity
+    # Track positions per symbol: symbol -> {quantity, entry_price, entry_idx}
+    positions: Dict[str, Dict[str, float]] = {}
     portfolio_values: List[float] = []
+    equity_timestamps: List[datetime] = []
     trades: List[Trade] = []
 
     # Get costs
     commission_rate = request.costs.get("commission", 0.001)
     slippage_pct = request.costs.get("slippage_pct", 0.0005)
 
+    # Get strategy parameters
+    params = strategy.params
+    evaluation_mode = params.evaluation_mode if hasattr(params, 'evaluation_mode') else PortfolioEvaluationMode.PER_SYMBOL
+    rebalancing_mode = params.rebalancing_mode if hasattr(params, 'rebalancing_mode') else RebalancingMode.SIGNAL_BASED
+    rebalancing_frequency = params.rebalancing_frequency if hasattr(params, 'rebalancing_frequency') else None
+    max_positions = params.max_positions if hasattr(params, 'max_positions') else None
+
     # Process each symbol in universe
     universe = strategy.universe or list(ohlcv_data.keys())
     if not universe:
         universe = list(ohlcv_data.keys())
 
-    # For simplicity, we'll backtest on the first symbol or combine signals
-    # In a more sophisticated version, we'd handle multi-symbol portfolios
-    primary_symbol = universe[0] if universe else list(ohlcv_data.keys())[0]
-    bars = ohlcv_data.get(primary_symbol, [])
-
-    if not bars:
-        logger.warning(f"No bars for primary symbol {primary_symbol}")
+    # Validate we have data for all symbols
+    for symbol in universe:
+        if symbol not in ohlcv_data or not ohlcv_data[symbol]:
+            logger.warning(f"No bars for symbol {symbol}, removing from universe")
+            universe = [s for s in universe if s != symbol]
+    
+    if not universe:
+        logger.error("No valid symbols in universe after validation")
         return BacktestResult(
             strategy=strategy,
             metrics=BacktestMetrics(sharpe=0.0, max_drawdown=0.0, total_return=0.0),
             trade_log=[],
         )
 
-    # Extract prices
-    prices = [bar["close"] for bar in bars]
-    timestamps = [bar["timestamp"] for bar in bars]
+    # For backward compatibility: if only one symbol and PER_SYMBOL mode, use simplified logic
+    if len(universe) == 1 and evaluation_mode == PortfolioEvaluationMode.PER_SYMBOL:
+        # Use original single-symbol logic for backward compatibility
+        primary_symbol = universe[0]
+        bars = ohlcv_data[primary_symbol]
+        prices = [bar["close"] for bar in bars]
+        timestamps = [bar["timestamp"] for bar in bars]
+        
+        # Convert string timestamps to datetime if needed
+        if isinstance(timestamps[0], str):
+            timestamps = [datetime.fromisoformat(ts.replace("Z", "+00:00")) for ts in timestamps]
 
-    # Separate entry and exit rules
-    entry_rules = [rule for rule in strategy.rules if rule.type == "entry"]
-    exit_rules = [rule for rule in strategy.rules if rule.type == "exit"]
-    
-    # If no explicit entry/exit rules, treat all rules as entry rules (backward compatibility)
-    if not entry_rules and not exit_rules:
-        entry_rules = strategy.rules
-        exit_rules = []
-        logger.debug("No explicit entry/exit rules found, treating all rules as entry rules")
+        # Separate entry and exit rules
+        entry_rules = [rule for rule in strategy.rules if rule.type == "entry"]
+        exit_rules = [rule for rule in strategy.rules if rule.type == "exit"]
+        
+        if not entry_rules and not exit_rules:
+            entry_rules = strategy.rules
+            exit_rules = []
+            logger.debug("No explicit entry/exit rules found, treating all rules as entry rules")
 
-    # Track position state (long/flat)
-    in_position = False
-    entry_price = 0.0
-    entry_idx = -1
+        in_position = False
+        last_rebalance_time: Optional[datetime] = None
 
-    # Event-driven backtest loop
-    for i in range(1, len(bars)):  # Start from 1 to have previous bar for indicators
-        current_price = prices[i]
-        current_timestamp = timestamps[i]
+        # Event-driven backtest loop
+        for i in range(1, len(bars)):
+            current_price = prices[i]
+            current_timestamp = timestamps[i]
 
-        # Evaluate entry or exit signals based on position state
-        if not in_position:
-            # When not in position, evaluate entry rules
-            entry_signal = _evaluate_strategy_rules(entry_rules, prices, i, filter_type="entry") if entry_rules else False
-            exit_signal = False
-        else:
-            # When in position, evaluate exit rules
-            entry_signal = False
-            exit_signal = _evaluate_strategy_rules(exit_rules, prices, i, filter_type="exit") if exit_rules else False
-
-        # Calculate portfolio value
-        portfolio_value = cash
-        for sym, qty in positions.items():
-            # For simplicity, use current price for all positions
-            portfolio_value += qty * current_price
-        portfolio_values.append(portfolio_value)
-
-        # Trading logic: enter/exit positions
-        if entry_signal and not in_position:
-            # Enter long position
-            params = strategy.params
-            if params.position_sizing == "fixed_fraction" and params.fraction:
-                target_value = portfolio_value * params.fraction
+            # Check rebalancing
+            has_signal_change = False
+            if not in_position:
+                entry_signal = _evaluate_strategy_rules(entry_rules, prices, i, filter_type="entry") if entry_rules else False
+                exit_signal = False
+                if entry_signal:
+                    has_signal_change = True
             else:
-                target_value = 1000.0  # Default fixed size
+                entry_signal = False
+                exit_signal = _evaluate_strategy_rules(exit_rules, prices, i, filter_type="exit") if exit_rules else False
+                if exit_signal:
+                    has_signal_change = True
 
-            # Calculate quantity
-            quantity = target_value / current_price if current_price > 0 else 0.0
-            quantity = round(quantity, 2)
+            # Calculate portfolio value
+            portfolio_value = cash
+            for sym, pos_info in positions.items():
+                if sym == primary_symbol:
+                    portfolio_value += pos_info["quantity"] * current_price
+            portfolio_values.append(portfolio_value)
+            equity_timestamps.append(current_timestamp)
 
-            if quantity > 0 and cash >= target_value:
-                # Apply slippage
-                fill_price = current_price * (1 + slippage_pct)
-                cost = quantity * fill_price
-                commission = cost * commission_rate
-                total_cost = cost + commission
+            # Check if rebalancing is needed
+            should_rebalance = _should_rebalance(
+                rebalancing_mode,
+                last_rebalance_time,
+                current_timestamp,
+                rebalancing_frequency,
+                has_signal_change,
+            )
 
-                if cash >= total_cost:
-                    cash -= total_cost
-                    positions[primary_symbol] = positions.get(primary_symbol, 0.0) + quantity
-                    in_position = True
-                    entry_price = fill_price
-                    entry_idx = i
+            # Trading logic: enter/exit positions
+            if entry_signal and not in_position:
+                if params.position_sizing == "fixed_fraction" and params.fraction:
+                    target_value = portfolio_value * params.fraction
+                else:
+                    target_value = 1000.0
+
+                quantity = target_value / current_price if current_price > 0 else 0.0
+                quantity = round(quantity, 2)
+
+                if quantity > 0 and cash >= target_value:
+                    fill_price = current_price * (1 + slippage_pct)
+                    cost = quantity * fill_price
+                    commission = cost * commission_rate
+                    total_cost = cost + commission
+
+                    if cash >= total_cost:
+                        cash -= total_cost
+                        positions[primary_symbol] = {
+                            "quantity": quantity,
+                            "entry_price": fill_price,
+                            "entry_idx": i,
+                        }
+                        in_position = True
+
+                        trades.append(
+                            Trade(
+                                timestamp=current_timestamp,
+                                symbol=primary_symbol,
+                                side="buy",
+                                quantity=quantity,
+                                price=fill_price,
+                            )
+                        )
+
+            elif exit_signal and in_position:
+                quantity = positions.get(primary_symbol, {}).get("quantity", 0.0)
+                if quantity > 0:
+                    fill_price = current_price * (1 - slippage_pct)
+                    proceeds = quantity * fill_price
+                    commission = proceeds * commission_rate
+                    net_proceeds = proceeds - commission
+
+                    cash += net_proceeds
+                    positions[primary_symbol] = {"quantity": 0.0, "entry_price": 0.0, "entry_idx": -1}
+                    in_position = False
 
                     trades.append(
                         Trade(
                             timestamp=current_timestamp,
                             symbol=primary_symbol,
-                            side="buy",
+                            side="sell",
                             quantity=quantity,
                             price=fill_price,
                         )
                     )
-                    logger.debug(
-                        f"Entered position: {quantity} shares of {primary_symbol} at {fill_price}",
-                        extra={"idx": i, "price": fill_price, "quantity": quantity},
-                    )
 
-        elif exit_signal and in_position:
-            # Exit position
-            quantity = positions.get(primary_symbol, 0.0)
+            if should_rebalance:
+                last_rebalance_time = current_timestamp
+
+        # Close any remaining positions at end
+        if in_position:
+            final_price = prices[-1]
+            quantity = positions.get(primary_symbol, {}).get("quantity", 0.0)
             if quantity > 0:
-                # Apply slippage
-                fill_price = current_price * (1 - slippage_pct)
+                fill_price = final_price * (1 - slippage_pct)
                 proceeds = quantity * fill_price
                 commission = proceeds * commission_rate
                 net_proceeds = proceeds - commission
-
                 cash += net_proceeds
-                positions[primary_symbol] = 0.0
-                in_position = False
 
                 trades.append(
                     Trade(
-                        timestamp=current_timestamp,
+                        timestamp=timestamps[-1],
                         symbol=primary_symbol,
                         side="sell",
                         quantity=quantity,
                         price=fill_price,
                     )
                 )
-                logger.debug(
-                    f"Exited position: {quantity} shares of {primary_symbol} at {fill_price}",
-                    extra={"idx": i, "price": fill_price, "quantity": quantity},
-                )
 
-    # Close any remaining positions at end
-    if in_position:
-        final_price = prices[-1]
-        quantity = positions.get(primary_symbol, 0.0)
-        if quantity > 0:
-            fill_price = final_price * (1 - slippage_pct)
-            proceeds = quantity * fill_price
-            commission = proceeds * commission_rate
-            net_proceeds = proceeds - commission
-            cash += net_proceeds
+        # Calculate final portfolio value for single-symbol path
+        final_portfolio_value = cash
+        remaining_quantity = positions.get(primary_symbol, {}).get("quantity", 0.0)
+        if remaining_quantity > 0.01:
+            final_price = prices[-1]
+            final_portfolio_value += remaining_quantity * final_price
+        portfolio_values.append(final_portfolio_value)
+        equity_timestamps.append(timestamps[-1])
 
-            trades.append(
-                Trade(
-                    timestamp=timestamps[-1],
-                    symbol=primary_symbol,
-                    side="sell",
-                    quantity=quantity,
-                    price=fill_price,
-                )
+    else:
+        # Multi-symbol portfolio logic
+        # Create unified timeline
+        timeline = _create_unified_timeline(ohlcv_data)
+        
+        if not timeline:
+            logger.error("No timeline events created")
+            return BacktestResult(
+                strategy=strategy,
+                metrics=BacktestMetrics(sharpe=0.0, max_drawdown=0.0, total_return=0.0),
+                trade_log=[],
             )
+
+        # Separate entry and exit rules
+        entry_rules = [rule for rule in strategy.rules if rule.type == "entry"]
+        exit_rules = [rule for rule in strategy.rules if rule.type == "exit"]
+        
+        if not entry_rules and not exit_rules:
+            entry_rules = strategy.rules
+            exit_rules = []
+
+        # Track signals per symbol
+        symbol_signals: Dict[str, Dict[str, bool]] = {}  # symbol -> {entry: bool, exit: bool}
+        last_rebalance_time: Optional[datetime] = None
+        symbol_prices: Dict[str, List[float]] = {}
+        symbol_timestamps: Dict[str, List[datetime]] = {}
+        
+        # Pre-process prices for each symbol
+        for symbol in universe:
+            bars = ohlcv_data[symbol]
+            symbol_prices[symbol] = [bar["close"] for bar in bars]
+            timestamps = [bar["timestamp"] for bar in bars]
+            if isinstance(timestamps[0], str):
+                symbol_timestamps[symbol] = [datetime.fromisoformat(ts.replace("Z", "+00:00")) for ts in timestamps]
+            else:
+                symbol_timestamps[symbol] = timestamps
+
+        # Process timeline events
+        for timestamp, symbol, bar_idx in timeline:
+            if symbol not in universe:
+                continue
+            
+            prices = symbol_prices[symbol]
+            if bar_idx >= len(prices) or bar_idx < 1:
+                continue
+
+            current_price = prices[bar_idx]
+            in_position = positions.get(symbol, {}).get("quantity", 0.0) > 0.01
+
+            # Evaluate signals
+            prev_entry = symbol_signals.get(symbol, {}).get("entry", False)
+            prev_exit = symbol_signals.get(symbol, {}).get("exit", False)
+            
+            if not in_position:
+                entry_signal = _evaluate_strategy_rules(entry_rules, prices, bar_idx, filter_type="entry") if entry_rules else False
+                exit_signal = False
+            else:
+                entry_signal = False
+                exit_signal = _evaluate_strategy_rules(exit_rules, prices, bar_idx, filter_type="exit") if exit_rules else False
+
+            symbol_signals[symbol] = {"entry": entry_signal, "exit": exit_signal}
+            has_signal_change = (entry_signal != prev_entry) or (exit_signal != prev_exit)
+
+            # Calculate portfolio value
+            portfolio_value = cash
+            current_prices: Dict[str, float] = {}
+            for sym in universe:
+                sym_bars = ohlcv_data[sym]
+                sym_idx = next((idx for ts, s, idx in timeline if s == sym and ts <= timestamp), len(sym_bars) - 1)
+                if sym_idx < len(sym_bars):
+                    current_prices[sym] = sym_bars[sym_idx]["close"]
+                    pos_info = positions.get(sym, {})
+                    portfolio_value += pos_info.get("quantity", 0.0) * current_prices[sym]
+            
+            portfolio_values.append(portfolio_value)
+            equity_timestamps.append(timestamp)
+
+            # Check rebalancing
+            should_rebalance = _should_rebalance(
+                rebalancing_mode,
+                last_rebalance_time,
+                timestamp,
+                rebalancing_frequency,
+                has_signal_change,
+            )
+
+            if evaluation_mode == PortfolioEvaluationMode.PER_SYMBOL:
+                # Per-symbol evaluation: each symbol trades independently
+                if entry_signal and not in_position:
+                    if params.position_sizing == "fixed_fraction" and params.fraction:
+                        target_value = portfolio_value * params.fraction
+                    else:
+                        target_value = 1000.0
+
+                    quantity = target_value / current_price if current_price > 0 else 0.0
+                    quantity = round(quantity, 2)
+
+                    if quantity > 0:
+                        fill_price = current_price * (1 + slippage_pct)
+                        cost = quantity * fill_price
+                        commission = cost * commission_rate
+                        total_cost = cost + commission
+
+                        if cash >= total_cost:
+                            cash -= total_cost
+                            positions[symbol] = {
+                                "quantity": quantity,
+                                "entry_price": fill_price,
+                                "entry_idx": bar_idx,
+                            }
+                            trades.append(
+                                Trade(
+                                    timestamp=timestamp,
+                                    symbol=symbol,
+                                    side="buy",
+                                    quantity=quantity,
+                                    price=fill_price,
+                                )
+                            )
+
+                elif exit_signal and in_position:
+                    quantity = positions.get(symbol, {}).get("quantity", 0.0)
+                    if quantity > 0:
+                        fill_price = current_price * (1 - slippage_pct)
+                        proceeds = quantity * fill_price
+                        commission = proceeds * commission_rate
+                        net_proceeds = proceeds - commission
+
+                        cash += net_proceeds
+                        positions[symbol] = {"quantity": 0.0, "entry_price": 0.0, "entry_idx": -1}
+                        trades.append(
+                            Trade(
+                                timestamp=timestamp,
+                                symbol=symbol,
+                                side="sell",
+                                quantity=quantity,
+                                price=fill_price,
+                            )
+                        )
+
+            elif evaluation_mode == PortfolioEvaluationMode.PORTFOLIO_LEVEL:
+                # Portfolio-level evaluation: aggregate signals and allocate capital
+                if should_rebalance:
+                    # Rank symbols by signal strength (simple: entry signal = 1, exit signal = -1)
+                    symbol_scores: Dict[str, float] = {}
+                    for sym in universe:
+                        sym_signals = symbol_signals.get(sym, {})
+                        if sym_signals.get("entry", False):
+                            symbol_scores[sym] = 1.0
+                        elif sym_signals.get("exit", False):
+                            symbol_scores[sym] = -1.0
+                        else:
+                            symbol_scores[sym] = 0.0
+                    
+                    # Select top N symbols
+                    sorted_symbols = sorted(symbol_scores.items(), key=lambda x: x[1], reverse=True)
+                    selected_symbols = [sym for sym, score in sorted_symbols if score > 0]
+                    if max_positions:
+                        selected_symbols = selected_symbols[:max_positions]
+                    
+                    # Equal-weight allocation
+                    if selected_symbols:
+                        allocation_per_symbol = 1.0 / len(selected_symbols)
+                        target_allocations = {sym: allocation_per_symbol for sym in selected_symbols}
+                        
+                        # Close positions not in target
+                        for sym in list(positions.keys()):
+                            if sym not in target_allocations:
+                                pos_info = positions.get(sym, {})
+                                qty = pos_info.get("quantity", 0.0)
+                                if qty > 0.01 and sym in current_prices:
+                                    fill_price = current_prices[sym] * (1 - slippage_pct)
+                                    proceeds = qty * fill_price
+                                    commission = proceeds * commission_rate
+                                    net_proceeds = proceeds - commission
+                                    cash += net_proceeds
+                                    positions[sym] = {"quantity": 0.0, "entry_price": 0.0, "entry_idx": -1}
+                                    trades.append(
+                                        Trade(
+                                            timestamp=timestamp,
+                                            symbol=sym,
+                                            side="sell",
+                                            quantity=qty,
+                                            price=fill_price,
+                                        )
+                                    )
+                        
+                        # Rebalance to target allocations
+                        new_cash, rebalance_trades = _rebalance_portfolio(
+                            portfolio_value,
+                            positions,
+                            target_allocations,
+                            current_prices,
+                            cash,
+                            commission_rate,
+                            slippage_pct,
+                            timestamp,
+                        )
+                        cash = new_cash
+                        trades.extend(rebalance_trades)
+                        last_rebalance_time = timestamp
+
+            if should_rebalance and evaluation_mode == PortfolioEvaluationMode.PER_SYMBOL:
+                last_rebalance_time = timestamp
+
+        # Close any remaining positions at end
+        final_timestamp = timeline[-1][0] if timeline else datetime.utcnow()
+        for symbol, pos_info in list(positions.items()):
+            quantity = pos_info.get("quantity", 0.0)
+            if quantity > 0.01:
+                bars = ohlcv_data.get(symbol, [])
+                if bars:
+                    final_price = bars[-1]["close"]
+                    fill_price = final_price * (1 - slippage_pct)
+                    proceeds = quantity * fill_price
+                    commission = proceeds * commission_rate
+                    net_proceeds = proceeds - commission
+                    cash += net_proceeds
+
+                    trades.append(
+                        Trade(
+                            timestamp=final_timestamp,
+                            symbol=symbol,
+                            side="sell",
+                            quantity=quantity,
+                            price=fill_price,
+                        )
+                    )
 
     # Calculate final portfolio value
     final_portfolio_value = cash
-    for sym, qty in positions.items():
-        final_price = prices[-1] if sym == primary_symbol else 0.0
-        final_portfolio_value += qty * final_price
+    final_timestamp = timeline[-1][0] if timeline else datetime.utcnow()
+    for symbol, pos_info in positions.items():
+        bars = ohlcv_data.get(symbol, [])
+        if bars:
+            final_price = bars[-1]["close"]
+            final_portfolio_value += pos_info.get("quantity", 0.0) * final_price
     portfolio_values.append(final_portfolio_value)
+    equity_timestamps.append(final_timestamp)
 
     # Calculate metrics
     if len(portfolio_values) < 2:
@@ -446,6 +886,14 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
 
             metrics = BacktestMetrics(sharpe=sharpe, max_drawdown=max_dd, total_return=total_return)
 
+    # Build equity curve from portfolio values and timestamps
+    equity_curve: Optional[List[EquityPoint]] = None
+    if len(portfolio_values) == len(equity_timestamps) and len(portfolio_values) > 0:
+        equity_curve = [
+            EquityPoint(timestamp=ts, value=val)
+            for ts, val in zip(equity_timestamps, portfolio_values)
+        ]
+
     logger.info(
         f"Backtest complete: {len(trades)} trades, Sharpe={metrics.sharpe:.2f}, Return={metrics.total_return:.2%}",
         extra={
@@ -457,4 +905,4 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
         },
     )
 
-    return BacktestResult(strategy=strategy, metrics=metrics, trade_log=trades)
+    return BacktestResult(strategy=strategy, metrics=metrics, trade_log=trades, equity_curve=equity_curve)

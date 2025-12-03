@@ -3,11 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import get_settings
 from .core.logging import configure_logging, get_logger
-from .routes import health, status, strategies
+from .routes import health, status, strategies, control
 
-configure_logging()
-logger = get_logger(__name__)
+# Configure structured logging with JSON format and file persistence
 settings = get_settings()
+configure_logging(
+    level=settings.log_level if hasattr(settings, "log_level") else None,
+    enable_json=True,
+    enable_file=True,
+)
+logger = get_logger(__name__)
 
 app = FastAPI(
     title="InvestoBot Orchestrator",
@@ -27,6 +32,7 @@ app.add_middleware(
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(strategies.router, prefix="/strategies", tags=["Strategies"])
 app.include_router(status.router, prefix="/trading", tags=["Trading Status"])
+app.include_router(control.router, prefix="/control", tags=["Control"])
 
 
 @app.get("/status")
