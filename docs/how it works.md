@@ -408,6 +408,7 @@ The backtester lives in `backend/app/trading/backtester.py`. It:
 - Interprets **entry/exit rules** from `StrategySpec`.
 - Simulates trades over time and tracks portfolio value.
 - Produces Sharpe, max drawdown, and total return.
+- Generates an **equity curve** that includes the initial portfolio value at the start of the backtest period.
 
 Entry/exit rules are evaluated via helper functions:
 
@@ -446,6 +447,12 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
     entry_rules = [rule for rule in strategy.rules if rule.type == "entry"]
     exit_rules = [rule for rule in strategy.rules if rule.type == "exit"]
     ...
+    # Record initial portfolio value at the first bar (index 0)
+    if len(bars) > 0:
+        portfolio_values.append(initial_cash)
+        equity_timestamps.append(timestamps[0])
+    
+    # Event-driven backtest loop (starts at index 1 to ensure previous bars exist for indicators)
     for i in range(1, len(bars)):
         current_price = prices[i]
         current_timestamp = timestamps[i]
@@ -463,6 +470,7 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
             ...
     ...
     # compute Sharpe, max drawdown, total return
+    # equity_curve is built from portfolio_values and equity_timestamps
 ```
 
 This gives a realistic-enough simulation for MVP, with:
@@ -567,6 +575,8 @@ The orchestrator:
 
 If `context.validation.walk_forward=true` or `context.validation.train_split > 0`, the orchestrator runs walk-forward validation via `backend/app/trading/validation.py`:
 
+**Note**: The validation module includes robust timestamp handling to ensure date comparisons work correctly with both string and datetime timestamp formats.
+
 ```133:151:backend/app/trading/orchestrator.py
         # Run walk-forward validation if enabled
         walk_forward_result: Optional[WalkForwardResult] = None
@@ -598,6 +608,8 @@ Walk-forward validation:
 ### 2.9 Scenario gating (optional)
 
 If `context.enable_scenarios=true`, the orchestrator evaluates strategies against predefined crisis scenarios via `backend/app/trading/scenarios.py`:
+
+**Note**: The scenario evaluation module includes robust timestamp handling to ensure date range filtering works correctly with both string and datetime timestamp formats.
 
 ```153:169:backend/app/trading/orchestrator.py
         # Run scenario evaluation and gating if enabled
@@ -735,6 +747,8 @@ Execution only happens when:
   - Support for SMA crossover, simple signals, momentum, mean-reversion logic.
   - Commission and slippage modeling.
   - Sharpe, max drawdown, and total return metrics.
+  - Equity curve generation with complete portfolio evolution from start to finish.
+  - Multi-symbol portfolio support with per-symbol and portfolio-level evaluation modes.
 - **Market data**:
   - Synthetic generator (`DATA_SOURCE=synthetic`) for fast local testing.
   - Yahoo Finance integration via `yfinance` (`DATA_SOURCE=yahoo`).
@@ -767,13 +781,15 @@ Execution only happens when:
 - **Observability & storage**
   - ✅ Store run results (metrics, trades, risk violations, fills) in a database (implemented).
   - ✅ Query endpoints for run history and best strategies (implemented).
-  - Add structured logging sinks and basic dashboards (e.g., Grafana, OpenTelemetry).
+  - ✅ Structured JSON logging with file persistence (implemented).
+  - Add basic dashboards (e.g., Grafana, OpenTelemetry).
 
 - **UI & UX**
+  - ✅ Control Panel component for kill switch and order management (implemented).
   - Extend the React dashboard to:
-    - Trigger `/strategies/run` from the UI with user-defined missions/context.
-    - Visualize backtest equity curves, metrics, and risk violations.
-    - Show live Alpaca paper positions and P&L.
+    - ✅ Trigger `/strategies/run` from the UI with user-defined missions/context (implemented).
+    - ✅ Visualize backtest equity curves, metrics, and risk violations (implemented).
+    - ✅ Show live Alpaca paper positions and P&L (implemented).
 
 - **Scheduling & automation**
   - ✅ Kill switch and cancel-all endpoint (implemented).
