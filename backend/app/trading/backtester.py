@@ -482,6 +482,11 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
         in_position = False
         last_rebalance_time: Optional[datetime] = None
 
+        # Record initial portfolio value at the first bar (index 0)
+        if len(bars) > 0:
+            portfolio_values.append(initial_cash)
+            equity_timestamps.append(timestamps[0])
+
         # Event-driven backtest loop
         for i in range(1, len(bars)):
             current_price = prices[i]
@@ -643,6 +648,11 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
                 symbol_timestamps[symbol] = [datetime.fromisoformat(ts.replace("Z", "+00:00")) for ts in timestamps]
             else:
                 symbol_timestamps[symbol] = timestamps
+
+        # Record initial portfolio value at the earliest timestamp
+        if timeline:
+            portfolio_values.append(initial_cash)
+            equity_timestamps.append(timeline[0][0])
 
         # Process timeline events
         for timestamp, symbol, bar_idx in timeline:
