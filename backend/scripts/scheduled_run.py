@@ -11,6 +11,7 @@ Environment variables:
     SCHEDULED_DATA_RANGE: Date range for backtesting (optional, uses default if not set)
     SCHEDULED_CONTEXT_JSON: Additional context as JSON string (optional)
 """
+import logging
 import os
 import sys
 import json
@@ -29,7 +30,7 @@ from app.trading.orchestrator import run_strategy_run
 
 # Configure logging
 settings = get_settings()
-configure_logging(level="INFO", enable_json=True, enable_file=True)
+configure_logging(level=logging.INFO, enable_json=True, enable_file=True)
 logger = get_logger(__name__)
 
 

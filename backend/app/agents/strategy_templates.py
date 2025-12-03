@@ -201,6 +201,11 @@ class TemplateRegistry:
         """Get example instantiations of all templates for few-shot learning."""
         examples = []
         for template in self._templates.values():
+            # Pairs trading requires two correlated symbols, others can use a single symbol
+            if template.type == "pairs_trading":
+                universe = ["AAPL", "MSFT"]  # Two symbols for pairs trading
+            else:
+                universe = ["AAPL"]  # Single symbol for other strategies
             examples.append({
                 "template_id": template.template_id,
                 "template_name": template.name,
@@ -209,7 +214,7 @@ class TemplateRegistry:
                     "strategy_id": f"example_{template.template_id}",
                     "name": f"Example {template.name}",
                     "description": template.description,
-                    "universe": ["AAPL", "MSFT"] if template.type != "pairs_trading" else ["AAPL", "MSFT"],
+                    "universe": universe,
                     "rules": template.example_rules,
                     "params": template.example_params
                 }

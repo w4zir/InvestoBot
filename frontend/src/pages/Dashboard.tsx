@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import StrategyRunForm from '@/components/StrategyRunForm'
 import BacktestVisualization from '@/components/BacktestVisualization'
 import LivePositions from '@/components/LivePositions'
+import ControlPanel from '@/components/ControlPanel'
 import { StrategyRunResponse, CandidateResult } from '@/api/backend'
 
 export default function Dashboard() {
@@ -63,6 +64,7 @@ export default function Dashboard() {
           <TabsTrigger value="strategy">Strategy Runner</TabsTrigger>
           <TabsTrigger value="results">Backtest Results</TabsTrigger>
           <TabsTrigger value="positions">Live Positions</TabsTrigger>
+          <TabsTrigger value="control">Control Panel</TabsTrigger>
         </TabsList>
 
         <TabsContent value="strategy" className="space-y-6">
@@ -146,6 +148,10 @@ export default function Dashboard() {
 
         <TabsContent value="positions" className="space-y-6">
           <LivePositions />
+        </TabsContent>
+
+        <TabsContent value="control" className="space-y-6">
+          <ControlPanel />
         </TabsContent>
       </Tabs>
     </main>

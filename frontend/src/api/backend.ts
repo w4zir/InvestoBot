@@ -147,3 +147,58 @@ export async function getHealth(): Promise<{ status: string }> {
   return fetchAPI<{ status: string }>('/health/');
 }
 
+// Control endpoints
+export interface KillSwitchStatus {
+  enabled: boolean;
+  reason?: string | null;
+  activated_at?: string | null;
+}
+
+export interface CancelOrdersResponse {
+  cancelled_count: number;
+  total_orders: number;
+  errors: string[];
+  message: string;
+}
+
+export interface OpenOrdersResponse {
+  count: number;
+  orders: any[];
+}
+
+export interface SchedulerStatus {
+  active_runs: string[];
+  active_run_count: number;
+  kill_switch_enabled: boolean;
+}
+
+export async function getKillSwitchStatus(): Promise<KillSwitchStatus> {
+  return fetchAPI<KillSwitchStatus>('/control/kill-switch/status');
+}
+
+export async function enableKillSwitch(reason: string = 'Manual activation'): Promise<{ status: string; reason: string; activated_at: string; message: string }> {
+  return fetchAPI<{ status: string; reason: string; activated_at: string; message: string }>(`/control/kill-switch/enable?reason=${encodeURIComponent(reason)}`, {
+    method: 'POST',
+  });
+}
+
+export async function disableKillSwitch(): Promise<{ status: string; message: string }> {
+  return fetchAPI<{ status: string; message: string }>('/control/kill-switch/disable', {
+    method: 'POST',
+  });
+}
+
+export async function cancelAllOrders(): Promise<CancelOrdersResponse> {
+  return fetchAPI<CancelOrdersResponse>('/control/orders/cancel-all', {
+    method: 'POST',
+  });
+}
+
+export async function getOpenOrders(): Promise<OpenOrdersResponse> {
+  return fetchAPI<OpenOrdersResponse>('/control/orders/open');
+}
+
+export async function getSchedulerStatus(): Promise<SchedulerStatus> {
+  return fetchAPI<SchedulerStatus>('/control/scheduler/status');
+}
+

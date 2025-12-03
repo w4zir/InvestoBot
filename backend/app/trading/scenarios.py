@@ -20,6 +20,13 @@ from app.trading.models import (
 logger = get_logger(__name__)
 
 
+def _ensure_datetime(timestamp) -> datetime:
+    """Convert timestamp to datetime if it's a string."""
+    if isinstance(timestamp, str):
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return timestamp
+
+
 # Predefined crisis scenarios
 SCENARIO_2008_CRISIS = Scenario(
     scenario_id="2008_crisis",
@@ -107,7 +114,7 @@ def evaluate_scenario(
         scenario_bars = [
             bar
             for bar in bars
-            if scenario.start_date <= bar["timestamp"] <= scenario.end_date
+            if scenario.start_date <= _ensure_datetime(bar["timestamp"]) <= scenario.end_date
         ]
         if scenario_bars:
             scenario_data[symbol] = scenario_bars

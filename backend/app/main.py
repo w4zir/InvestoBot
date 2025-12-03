@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,7 +9,7 @@ from .routes import health, status, strategies, control
 # Configure structured logging with JSON format and file persistence
 settings = get_settings()
 configure_logging(
-    level=settings.log_level if hasattr(settings, "log_level") else None,
+    level=logging.INFO,
     enable_json=True,
     enable_file=True,
 )

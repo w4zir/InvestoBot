@@ -20,6 +20,13 @@ from app.trading.models import (
 logger = get_logger(__name__)
 
 
+def _ensure_datetime(timestamp) -> datetime:
+    """Convert timestamp to datetime if it's a string."""
+    if isinstance(timestamp, str):
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return timestamp
+
+
 def split_data(
     ohlcv_data: Dict[str, List[Dict]],
     train_split: float = 0.7,
@@ -280,7 +287,7 @@ def run_walk_forward_backtest(
             train_bars = [
                 bar
                 for bar in bars
-                if train_start <= bar["timestamp"] <= train_end
+                if train_start <= _ensure_datetime(bar["timestamp"]) <= train_end
             ]
             if train_bars:
                 train_data[symbol] = train_bars
@@ -291,7 +298,7 @@ def run_walk_forward_backtest(
             test_bars = [
                 bar
                 for bar in bars
-                if test_start <= bar["timestamp"] <= test_end
+                if test_start <= _ensure_datetime(bar["timestamp"]) <= test_end
             ]
             if test_bars:
                 test_data[symbol] = test_bars
