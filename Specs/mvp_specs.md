@@ -146,6 +146,39 @@ Primary goals:
 3. Week 4–6: Paper execution adapter, logging, dashboard.
 4. Week 6–8: Evaluation harness + golden dataset, automated gating.
 
-
-
 ---
+
+## Current implementation notes (MVP)
+
+- **Orchestrator (FastAPI / Python)**  
+  - Implemented in `backend/app/main.py` and `backend/app/trading/orchestrator.py`.  
+  - Exposed via `POST /strategies/run` and `GET /trading/account` (see `README.md` and `docs/how it works.md`).
+
+- **LLM Planner (Hosted LLM)**  
+  - Implemented using Google GenAI via `backend/app/agents/google_client.py` and `backend/app/agents/strategy_planner.py`.  
+  - Strategies are returned as `StrategySpec` models (`backend/app/trading/models.py`).
+
+- **Backtester (Deterministic)**  
+  - Implemented in `backend/app/trading/backtester.py` using OHLCV data from `backend/app/trading/market_data.py`.  
+  - Supports synthetic data or Yahoo Finance (`DATA_SOURCE` flag), commission, slippage, and basic metrics (Sharpe, max drawdown, total return).
+
+- **Risk Engine**  
+  - Implemented in `backend/app/trading/risk_engine.py`.  
+  - Enforces per-trade notional limits, portfolio exposure constraints, and symbol blacklist, using settings from `backend/app/core/config.py`.
+
+- **Execution Adapter (Paper Broker)**  
+  - Implemented as an Alpaca paper-trading adapter in `backend/app/trading/broker_alpaca.py`.  
+  - Integrated into the orchestrator with safety flags (`APP_ENV`, `ALLOW_EXECUTE`) to block execution in dev by default.
+
+- **Data sources**  
+  - Synthetic data: fast local testing (`DATA_SOURCE=synthetic`).  
+  - Yahoo Finance: real historical OHLCV via `yfinance` (`DATA_SOURCE=yahoo`).
+
+- **Evaluation & golden dataset**  
+  - Basic backtest metrics are in place; the full golden dataset harness (multiple historical scenarios, Monte Carlo resampling, automated gating) is **not yet implemented** and remains a next step.
+
+- **Observability & Dashboard**  
+  - Backend logs decisions and metrics; the React dashboard exists as a Supabase-authenticated shell but is not yet wired to show strategy runs and P&L.  
+  - Dashboard and richer observability (Grafana/OTel) are future work.
+
+For a detailed walkthrough of the current implementation, including example requests and code snippets, see [`docs/how it works.md`](../docs/how%20it%20works.md).

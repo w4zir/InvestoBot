@@ -145,6 +145,27 @@ This document contains long term production grade specs for investobot.
 5. Human review panel approves promotion
 6. Promote to production and enable monitoring/rollback
 
-
 ---
+
+## Current MVP implementation vs long-term spec
+
+This document describes the **long-term production architecture**. The current MVP implements a smaller, backend-focused subset:
+
+- **Implemented in MVP** (see `README.md` and `docs/how it works.md`):
+  - FastAPI-based orchestrator coordinating:
+    - Google GenAI-based strategy planner (`agents/google_client.py`, `agents/strategy_planner.py`).
+    - Deterministic backtester (`trading/backtester.py`) over synthetic or Yahoo Finance data (`trading/market_data.py`).
+    - Risk engine with static limits (`trading/risk_engine.py`).
+    - Alpaca paper-trading adapter for execution (`trading/broker_alpaca.py`).
+  - Endpoints for running strategies and inspecting paper account status.
+
+- **Planned / not yet implemented** (long-term items from this spec):
+  - Full **Agent Orchestrator** with persistent workflow engine, retries, and rich audit logs beyond simple FastAPI flows.
+  - Dedicated **model services** (separate planner/judge models, feature store, RAG services) with promotion pipelines.
+  - Comprehensive **tool registry**, VaR-based **real-time risk engine**, and multi-broker execution gateway.
+  - Production-grade **observability stack** (Prometheus/Grafana, OpenTelemetry traces, centralized logging).
+  - Formal **governance**, human approval workflows, and incident runbooks integrated into a UI.
+  - CI/CD and AgentOps pipelines for canary deployments and safety-gated rollouts.
+
+Use this file as the north star for a production system; consult [`Specs/mvp_specs.md`](./mvp_specs.md) and [`docs/how it works.md`](../docs/how%20it%20works.md) to understand the current MVP implementation and how it can be iteratively extended toward these goals.
 

@@ -207,6 +207,15 @@ At a high level, the backend implements the following flow:
 
 This design keeps the core trading logic server-side and ready for future integration with the React dashboard or other clients.
 
+## Understanding the System
+
+For a detailed, example-driven explanation of:
+- How to configure and run the MVP to generate orders.
+- How each component (planner, backtester, risk engine, Alpaca adapter) works internally.
+- Which parts of the long-term spec are already implemented and what’s next.
+
+see [`docs/how it works.md`](docs/how%20it%20works.md).
+
 ## Features
 
 ### Authentication

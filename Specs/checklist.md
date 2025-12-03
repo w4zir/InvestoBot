@@ -491,15 +491,15 @@ These tasks are essential for a working MVP and should be prioritized.
   - [ ] Create architecture diagrams
 
 - [ ] **User Documentation**
-  - [ ] Update README with setup instructions
+  - [x] Update README with setup instructions (includes backend venv, env vars, and endpoints)
   - [ ] Create user guide for dashboard
-  - [ ] Document strategy creation process
-  - [ ] Add troubleshooting guide
+  - [x] Document strategy creation and run process (see `docs/how it works.md`)
+  - [x] Add troubleshooting guide (see README “Troubleshooting” and `test/testing.md`)
 
 - [ ] **Developer Documentation**
-  - [ ] Document development setup
+  - [x] Document development setup (README: prerequisites, quick start, backend/venv)
   - [ ] Add contribution guidelines
-  - [ ] Document testing procedures
+  - [x] Document testing procedures (see `test/README.md` and `test/testing.md`)
   - [ ] Create architecture decision records (ADRs)
 
 ---

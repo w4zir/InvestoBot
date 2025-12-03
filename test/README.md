@@ -80,7 +80,8 @@ python test_api.py && echo "All tests passed" || echo "Tests failed"
 
 ## See Also
 
-- `testing.md` - Detailed manual testing guide
-- `../README.md` - Project setup and documentation
-- `../Specs/testing.md` - Architecture and testing specifications
-
+- `testing.md` - Detailed manual testing guide for the current MVP pipeline (strategy → data → backtest → orders → risk → optional execution)
+- `../README.md` - Project setup, environment configuration, and backend architecture overview
+- `../docs/how it works.md` - Deep dive into how the system works end-to-end with examples
+- `../Specs/mvp_specs.md` - MVP design goals and success criteria with current implementation notes
+- `../Specs/full_specs.md` - Long-term production architecture and roadmap

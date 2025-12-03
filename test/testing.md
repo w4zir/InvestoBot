@@ -1,6 +1,6 @@
 # InvestoBot Testing Guide
 
-This document explains how to test the critical path of the InvestoBot trading system, including the order generation, backtester, and execution flow.
+This document explains how to test the critical path of the InvestoBot trading system, including strategy generation, market data loading, backtesting, order generation, risk assessment, and (optional) execution via Alpaca paper trading.
 
 ---
 
@@ -20,14 +20,14 @@ This document explains how to test the critical path of the InvestoBot trading s
 
 The critical path consists of:
 
-1. **Strategy Generation** - LLM generates candidate strategies
-2. **Market Data Loading** - Historical OHLCV data (synthetic or Yahoo Finance)
-3. **Backtesting** - Strategy evaluation on historical data
-4. **Order Generation** - Convert strategy signals to concrete orders
-5. **Risk Assessment** - Validate orders against risk rules
-6. **Execution** - Execute approved orders via Alpaca (optional)
+1. **Strategy Generation** – Google GenAI-based planner proposes candidate strategies (`StrategySpec`).
+2. **Market Data Loading** – Historical OHLCV data (synthetic or Yahoo Finance via `yfinance`).
+3. **Backtesting** – Event-driven strategy evaluation with commission and slippage.
+4. **Order Generation** – Convert backtest signals and portfolio state into concrete `Order` objects.
+5. **Risk Assessment** – Validate orders against static risk rules (notional, exposure, blacklist).
+6. **Execution** – Execute approved orders via Alpaca paper trading (optional, safety-gated).
 
-This guide covers testing each component individually and the full pipeline end-to-end.
+This guide covers testing each component individually and the full pipeline end-to-end using the `/strategies/run` and `/trading/account` endpoints.
 
 ---
 
@@ -35,7 +35,7 @@ This guide covers testing each component individually and the full pipeline end-
 
 ### Environment Variables
 
-Create a `.env` file in the `backend/` directory with the following variables:
+Create a `.env` file in the `backend/` directory with the following variables (see `README.md` and `docs/how it works.md` for more detail):
 
 ```bash
 # Google AI (for strategy generation)
@@ -138,7 +138,7 @@ See `test/README.md` for more details.
 
 ### Manual Testing (curl commands)
 
-The following sections show both Python script and curl command options for each test.
+The following sections show both Python script and curl command options for each test. For more examples and deeper explanations of the request/response structure, see `docs/how it works.md`.
 
 ---
 
