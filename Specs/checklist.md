@@ -31,13 +31,13 @@ These tasks are essential for a working MVP and should be prioritized.
   - [x] Implement position sizing logic (fixed_fraction, fixed_size from StrategyParams)
   - [x] Generate orders based on backtest trade log or latest signals
   - [x] Wire order generation into orchestrator (replace empty `proposed_orders` list)
-  - [ ] Test order generation with different strategy types (see testing.md)
+  - [x] Test order generation with different strategy types ✅ (momentum, mean reversion, MA crossover tests added)
 
 - [x] **Fix portfolio state management** ✅ (v1 implemented)
   - [x] Replace hardcoded portfolio state with real broker portfolio fetch
-  - [ ] Implement portfolio state tracking over time (future enhancement)
-  - [ ] Add portfolio state persistence (optional for MVP)
-  - [ ] Update portfolio after order execution (future enhancement)
+  - [x] Implement portfolio state tracking over time ✅ (portfolio snapshots with timestamps)
+  - [x] Add portfolio state persistence ✅ (portfolio_snapshots table, persistence functions)
+  - [x] Update portfolio after order execution ✅ (portfolio updated based on fills, post-execution snapshots saved)
 
 - [x] **Complete execution flow** ✅ (v1 implemented)
   - [x] Verify order generation → risk assessment → execution chain works end-to-end
@@ -64,11 +64,13 @@ These tasks are essential for a working MVP and should be prioritized.
   - [ ] Volatility Breakout strategy (future)
   - [x] Make templates configurable via StrategySpec.rules
 
-- [ ] **Backtest enhancements** (future)
-  - [ ] Support walk-forward analysis
-  - [ ] Add out-of-sample validation
+- [x] **Backtest enhancements** ✅ (v1 implemented)
+  - [x] Support walk-forward analysis
+  - [x] Add out-of-sample validation (train/validation/holdout splits)
   - [ ] Implement parameter optimization (optional for MVP)
   - [x] Add trade log with detailed entries (entry/exit, P&L per trade)
+  - [x] Fix equity curve to include initial portfolio value
+  - [x] Support multi-symbol portfolio backtesting with per-symbol and portfolio-level modes
 
 ---
 
@@ -84,13 +86,13 @@ These tasks are essential for a working MVP and should be prioritized.
   - [x] Keep synthetic data as fallback for testing
   - [ ] Support multiple timeframes (1m, 5m, 1d, etc.) (currently daily only)
   - [x] Handle missing data gracefully
-  - [ ] Add data validation (check for gaps, outliers) (future)
+  - [x] Add data validation (check for gaps, outliers) ✅ (implemented in data_quality.py)
 
-- [ ] **Data management**
-  - [ ] Implement data refresh/update mechanism
-  - [ ] Add data quality checks
-  - [ ] Create data schema/migration for stored data
-  - [ ] Add data versioning
+- [x] **Data management** ✅ (v1 implemented)
+  - [x] Implement data refresh/update mechanism ✅ (on-demand and scheduled refresh)
+  - [x] Add data quality checks ✅ (gap detection, outlier detection, OHLC validation, missing values, duplicates)
+  - [x] Create data schema/migration for stored data ✅ (unified schema with data_metadata, data_quality_reports, data_sources tables)
+  - [x] Add data versioning ✅ (metadata-based versioning with checksums and timestamps)
 
 ### Risk Engine Enhancements
 
@@ -156,16 +158,16 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ### Strategy Planner Agent
 
-- [ ] **Strategy quality checks**
-  - [ ] Validate strategy logic (indicators, parameters)
-  - [ ] Check for conflicting rules
-  - [ ] Enforce parameter bounds (min/max values)
-  - [ ] Validate universe symbols exist
+- [x] **Strategy quality checks** ✅ (v1 implemented)
+  - [x] Validate strategy logic (indicators, parameters)
+  - [x] Check for conflicting rules
+  - [x] Enforce parameter bounds (min/max values) - fraction bounds, blacklist checks
+  - [ ] Validate universe symbols exist (future)
 
-- [ ] **Strategy diversity**
-  - [ ] Ensure diverse strategy types per run
-  - [ ] Deduplicate similar strategies
-  - [ ] Balance strategy types (momentum, mean-reversion, etc.)
+- [x] **Strategy diversity** ✅ (v1 implemented)
+  - [x] Ensure diverse strategy types per run (warnings logged)
+  - [x] Deduplicate similar strategies (similarity checking)
+  - [x] Balance strategy types (momentum, mean-reversion, etc.) - via prompt engineering
 
 - [ ] **Context enhancement**
   - [ ] Enrich context with current market data
@@ -173,10 +175,11 @@ These tasks are essential for a working MVP and should be prioritized.
   - [ ] Include market regime information
   - [ ] Add memory/RAG integration
 
-- [ ] **Strategy templates**
-  - [ ] Create predefined strategy templates
-  - [ ] Allow LLM to instantiate templates with parameters
-  - [ ] Validate against known strategy patterns
+- [x] **Strategy templates** ✅ (v1 implemented)
+  - [x] Create predefined strategy templates (volatility breakout, pairs trading, intraday mean-reversion)
+  - [x] Allow LLM to instantiate templates with parameters
+  - [x] Validate against known strategy patterns
+  - [x] Fix universe assignment for pairs trading vs other strategy types
 
 - [ ] **Fallback strategies**
   - [ ] Create static strategy library
@@ -207,11 +210,11 @@ These tasks are essential for a working MVP and should be prioritized.
   - [ ] Add retry logic for transient failures
   - [ ] Return partial results on errors
 
-- [ ] **Run persistence**
-  - [ ] Store run results to database
-  - [ ] Add run history query endpoint
-  - [ ] Enable strategy comparison across runs
-  - [ ] Add run replay capability
+- [x] **Run persistence** ✅ (v1 implemented)
+  - [x] Store run results to database (Supabase)
+  - [x] Add run history query endpoint (`/strategies/history`)
+  - [x] Enable strategy comparison across runs (`/strategies/best`)
+  - [ ] Add run replay capability (future)
 
 - [ ] **Real-time updates**
   - [ ] Add WebSocket/SSE for progress updates
@@ -275,12 +278,19 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ### Dashboard Enhancements
 
-- [ ] **Strategy Run Interface**
-  - [ ] Create form to submit strategy run requests
-  - [ ] Input fields: mission, universe, lookback days, execute flag
-  - [ ] Call `/strategies/run` endpoint
-  - [ ] Display loading state during run
-  - [ ] Show run results when complete
+- [x] **Strategy Run Interface** ✅ (v1 implemented)
+  - [x] Create form to submit strategy run requests
+  - [x] Input fields: mission, universe, lookback days, execute flag
+  - [x] Call `/strategies/run` endpoint
+  - [x] Display loading state during run
+  - [x] Show run results when complete
+
+- [x] **Control Panel** ✅ (v1 implemented)
+  - [x] Kill switch enable/disable UI
+  - [x] Open orders listing
+  - [x] Cancel all orders functionality
+  - [x] Scheduler status display
+  - [x] Auto-refresh functionality
 
 - [ ] **Strategy Results Display**
   - [ ] List all candidate strategies
@@ -341,18 +351,18 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ## Risk & Safety
 
-- [ ] **Enhanced risk controls**
-  - [ ] Multi-tier risk checks (static → real-time → adaptive)
-  - [ ] Kill switch endpoint to cancel all orders
-  - [ ] Daily loss limits
-  - [ ] Position size limits per symbol
-  - [ ] Maximum portfolio exposure limits
+- [x] **Enhanced risk controls** ✅ (v1 implemented)
+  - [x] Multi-tier risk checks (static risk engine + scenario gating)
+  - [x] Kill switch endpoint to cancel all orders (`/control/kill-switch/*`, `/control/orders/cancel-all`)
+  - [ ] Daily loss limits (future)
+  - [ ] Position size limits per symbol (future)
+  - [x] Maximum portfolio exposure limits (implemented)
 
-- [ ] **Safety features**
-  - [ ] Paper trading mode enforced by default
-  - [ ] Explicit confirmation for live trading
-  - [ ] Audit log for all trading decisions
-  - [ ] Human approval workflow for large trades
+- [x] **Safety features** ✅ (v1 implemented)
+  - [x] Paper trading mode enforced by default (APP_ENV=dev, ALLOW_EXECUTE=false)
+  - [x] Explicit confirmation for live trading (ALLOW_EXECUTE flag required)
+  - [x] Audit log for all trading decisions (persistence to database)
+  - [ ] Human approval workflow for large trades (future)
 
 - [ ] **Monitoring & Alerts**
   - [ ] Real-time risk metric monitoring
@@ -366,29 +376,30 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ### Evaluation Harness
 
-- [ ] **Golden dataset creation**
-  - [ ] Define 8-12 historical scenarios (bull, bear, sideways, crashes)
-  - [ ] Create holdout periods for each scenario
-  - [ ] Document expected behavior for each scenario
+- [x] **Golden dataset creation** ✅ (v1 implemented)
+  - [x] Define historical scenarios (2008 crisis, 2020 COVID, 2022 bear market)
+  - [x] Create scenario definitions with date ranges and tags
+  - [x] Document expected behavior for each scenario
 
-- [ ] **Automated evaluation**
-  - [ ] Create `/strategies/evaluate` endpoint
-  - [ ] Run backtests across all scenarios
-  - [ ] Compare metrics against thresholds
-  - [ ] Return pass/fail for each scenario
-  - [ ] Generate evaluation report
+- [x] **Automated evaluation** ✅ (v1 implemented)
+  - [x] Integrated into `/strategies/run` with `enable_scenarios=true`
+  - [x] Run backtests across selected scenarios
+  - [x] Compare metrics against thresholds (gating rules)
+  - [x] Return pass/fail for each scenario (GatingResult)
+  - [ ] Generate evaluation report (future - currently in response)
 
-- [ ] **Evaluation metrics**
-  - [ ] Sharpe ratio threshold
-  - [ ] Max drawdown threshold
-  - [ ] Minimum total return
-  - [ ] Maximum single-day loss
-  - [ ] Exposure limit compliance
+- [x] **Evaluation metrics** ✅ (v1 implemented)
+  - [x] Sharpe ratio threshold (configurable via GatingRule)
+  - [x] Max drawdown threshold (configurable via GatingRule)
+  - [x] Minimum total return (can be added via GatingRule)
+  - [ ] Maximum single-day loss (future)
+  - [x] Exposure limit compliance (via risk engine)
 
-- [ ] **Strategy gating**
-  - [ ] Automatic rejection of strategies failing evaluation
-  - [ ] Human review for borderline cases
-  - [ ] Approval workflow for production strategies
+- [x] **Strategy gating** ✅ (v1 implemented)
+  - [x] Automatic rejection of strategies failing evaluation (blocks execution)
+  - [x] Override capability (`gating_override=true`)
+  - [ ] Human review for borderline cases (future)
+  - [ ] Approval workflow for production strategies (future)
 
 ### Testing
 
@@ -447,11 +458,13 @@ These tasks are essential for a working MVP and should be prioritized.
   - [ ] Build and push Docker images
   - [ ] Deploy to staging on merge to main
 
-- [ ] **Monitoring & Logging**
-  - [ ] Set up structured logging
+- [x] **Monitoring & Logging** ✅ (v1 implemented)
+  - [x] Set up structured logging with JSON format
+  - [x] Add file-based log persistence
+  - [x] Fix logging configuration in main.py and scheduled_run.py
   - [ ] Add log aggregation (ELK, CloudWatch, etc.)
   - [ ] Set up application monitoring (Sentry, DataDog, etc.)
-  - [ ] Add health check endpoints
+  - [x] Add health check endpoints (`/health/`, `/status`)
   - [ ] Create monitoring dashboard
 
 - [ ] **Database setup**
@@ -565,13 +578,37 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ---
 
+## Bug Fixes & Code Quality
+
+### Recent Bug Fixes (2024-12-30)
+
+- [x] **Date comparison fixes** ✅
+  - [x] Fixed timestamp conversion in scenario evaluation (`scenarios.py`)
+  - [x] Fixed timestamp conversion in walk-forward validation (`validation.py`)
+  - [x] Added `_ensure_datetime()` helper to handle both string and datetime timestamps
+
+- [x] **Logging configuration fixes** ✅
+  - [x] Fixed `configure_logging()` call in `main.py` to use `logging.INFO` instead of `None`
+  - [x] Fixed `configure_logging()` call in `scheduled_run.py` to use `logging.INFO` instead of string `"INFO"`
+
+- [x] **Strategy templates fix** ✅
+  - [x] Fixed meaningless ternary expression in `strategy_templates.py`
+  - [x] Pairs trading now correctly uses two symbols, other strategies use single symbol
+
+- [x] **Equity curve fix** ✅
+  - [x] Fixed equity curve to include initial portfolio value at start of backtest
+  - [x] Ensures complete portfolio evolution representation from start to finish
+  - [x] Applied to both single-symbol and multi-symbol backtest paths
+
+---
+
 ## Progress Tracking
 
-**Last Updated**: [Date]
+**Last Updated**: 2024-12-30
 
-**Overall Progress**: [X]% Complete
+**Overall Progress**: ~75% Complete (MVP core features implemented)
 
-**MVP Status**: [ ] Not Started | [ ] In Progress | [ ] Complete
+**MVP Status**: [x] Complete (core trading pipeline, backtesting, risk, execution, validation, gating, persistence)
 
-**Next Milestone**: [Description]
+**Next Milestone**: Production hardening (monitoring, scaling, advanced features)
 
