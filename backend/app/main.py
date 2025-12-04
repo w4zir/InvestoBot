@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import get_settings
 from .core.logging import configure_logging, get_logger
-from .routes import health, status, strategies, control
+from .routes import control, data, health, status, strategies
 
 # Configure structured logging with JSON format and file persistence
 settings = get_settings()
@@ -34,6 +34,7 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(strategies.router, prefix="/strategies", tags=["Strategies"])
 app.include_router(status.router, prefix="/trading", tags=["Trading Status"])
 app.include_router(control.router, prefix="/control", tags=["Control"])
+app.include_router(data.router, prefix="/data", tags=["Data Management"])
 
 
 @app.get("/status")

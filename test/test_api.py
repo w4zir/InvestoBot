@@ -542,6 +542,92 @@ class APITester:
             self.print_warning(f"History test failed (may be expected if DB not configured): {e}")
             return True  # Not a failure if DB is not available
 
+    def test_data_refresh(self) -> bool:
+        """Test data refresh endpoint"""
+        self.print_header("Test: Data Refresh")
+        try:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+            
+            payload = {
+                "symbols": ["AAPL"],
+                "start_date": start_date.date().isoformat(),
+                "end_date": end_date.date().isoformat(),
+                "force": False
+            }
+            
+            self.print_info(f"Request payload: {json.dumps(payload, indent=2)}")
+            response = self.session.post(f"{self.base_url}/data/refresh", json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            
+            if "refreshed" in data and "cached" in data:
+                self.print_success("Data refresh endpoint working")
+                self.print_info(f"Refreshed: {data.get('refreshed', [])}")
+                self.print_info(f"Cached: {data.get('cached', [])}")
+                self.print_info(f"Message: {data.get('message', '')}")
+                return True
+            else:
+                self.print_error("Invalid response format")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Data refresh test failed: {e}")
+            return False
+    
+    def test_data_metadata(self) -> bool:
+        """Test data metadata endpoint"""
+        self.print_header("Test: Data Metadata")
+        try:
+            response = self.session.get(f"{self.base_url}/data/metadata?limit=10")
+            response.raise_for_status()
+            data = response.json()
+            
+            if isinstance(data, list):
+                self.print_success(f"Retrieved {len(data)} metadata entries")
+                if data:
+                    entry = data[0]
+                    self.print_info(f"Sample entry: symbol={entry.get('symbol')}, last_updated={entry.get('last_updated')}")
+                return True
+            else:
+                self.print_error("Invalid response format")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Data metadata test failed: {e}")
+            return False
+    
+    def test_data_quality(self) -> bool:
+        """Test data quality endpoint"""
+        self.print_header("Test: Data Quality")
+        try:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+            
+            # Test validate endpoint
+            params = {
+                "symbol": "AAPL",
+                "start_date": start_date.date().isoformat(),
+                "end_date": end_date.date().isoformat()
+            }
+            
+            response = self.session.post(f"{self.base_url}/data/validate", params=params, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            
+            if "overall_status" in data:
+                self.print_success("Data quality validation working")
+                self.print_info(f"Overall status: {data.get('overall_status')}")
+                self.print_info(f"Issues found: {len(data.get('issues_found', []))}")
+                return True
+            else:
+                self.print_error("Invalid response format")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Data quality test failed: {e}")
+            return False
+    
     def test_best_strategies(self) -> bool:
         """Test 11: Best strategies endpoint"""
         self.print_header("Test 11: Best Strategies")
@@ -584,6 +670,9 @@ class APITester:
             ("Kill Switch", self.test_kill_switch),
             ("Strategy History", self.test_strategy_history),
             ("Best Strategies", self.test_best_strategies),
+            ("Data Refresh", self.test_data_refresh),
+            ("Data Metadata", self.test_data_metadata),
+            ("Data Quality", self.test_data_quality),
         ]
         
         if include_execution:
@@ -634,7 +723,7 @@ Examples:
     
     parser.add_argument(
         "--test",
-        choices=["health", "status", "strategy", "account", "edge", "walkforward", "scenarios", "killswitch", "history", "best", "all"],
+        choices=["health", "status", "strategy", "account", "edge", "walkforward", "scenarios", "killswitch", "history", "best", "data", "all"],
         default="all",
         help="Which test to run (default: all)"
     )
@@ -681,6 +770,13 @@ Examples:
         sys.exit(0 if success else 1)
     elif args.test == "best":
         success = tester.test_best_strategies()
+        sys.exit(0 if success else 1)
+    elif args.test == "data":
+        success = (
+            tester.test_data_refresh() and
+            tester.test_data_metadata() and
+            tester.test_data_quality()
+        )
         sys.exit(0 if success else 1)
 
 

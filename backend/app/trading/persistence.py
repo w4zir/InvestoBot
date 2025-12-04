@@ -12,7 +12,11 @@ from app.core.database import get_supabase_client
 from app.core.logging import get_logger
 from app.trading.db_models import (
     BacktestResultDB,
+    DataMetadataDB,
+    DataQualityReportDB,
+    DataSourceDB,
     ExecutionResultDB,
+    PortfolioSnapshotDB,
     RiskAssessmentDB,
     StrategyDB,
     StrategyRunDB,
@@ -23,6 +27,7 @@ from app.trading.models import (
     CandidateResult,
     Fill,
     Order,
+    PortfolioState,
     RiskAssessment,
     StrategyRunResponse,
     StrategySpec,
@@ -313,6 +318,209 @@ class PersistenceService:
             return results
         except Exception as e:
             logger.error(f"Failed to get best strategies: {e}", exc_info=True)
+            return []
+    
+    def save_portfolio_snapshot(
+        self,
+        portfolio_state: "PortfolioState",
+        run_id: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        snapshot_type: str = "periodic",
+        notes: Optional[str] = None,
+        latest_prices: Optional[Dict[str, float]] = None,
+    ) -> bool:
+        """
+        Save a portfolio state snapshot to the database.
+        
+        Args:
+            portfolio_state: The PortfolioState to save
+            run_id: Optional run_id to associate with
+            strategy_id: Optional strategy_id to associate with
+            snapshot_type: Type of snapshot ('initial', 'pre_execution', 'post_execution', 'periodic')
+            notes: Optional notes about the snapshot
+            latest_prices: Optional dict of latest prices to calculate portfolio value
+        
+        Returns True if successful, False otherwise (non-blocking).
+        """
+        if not self.client:
+            logger.debug("Skipping portfolio snapshot: Supabase client not available")
+            return False
+        
+        try:
+            # Calculate portfolio value
+            portfolio_value = portfolio_state.cash
+            positions_data = []
+            
+            for pos in portfolio_state.positions:
+                position_dict = {
+                    "symbol": pos.symbol,
+                    "quantity": pos.quantity,
+                    "average_price": pos.average_price,
+                }
+                positions_data.append(position_dict)
+                
+                # Add position value if prices available
+                if latest_prices and pos.symbol in latest_prices:
+                    portfolio_value += pos.quantity * latest_prices[pos.symbol]
+            
+            snapshot_data = {
+                "run_id": run_id,
+                "strategy_id": strategy_id,
+                "snapshot_type": snapshot_type,
+                "cash": portfolio_state.cash,
+                "positions": positions_data,
+                "portfolio_value": portfolio_value,
+                "timestamp": datetime.utcnow().isoformat(),
+                "notes": notes,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            
+            self.client.table("portfolio_snapshots").insert(snapshot_data).execute()
+            logger.debug(
+                f"Saved portfolio snapshot: type={snapshot_type}, value={portfolio_value:.2f}, "
+                f"run_id={run_id}, strategy_id={strategy_id}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save portfolio snapshot: {e}", exc_info=True)
+            return False
+    
+    def get_portfolio_snapshots(
+        self,
+        run_id: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        snapshot_type: Optional[str] = None,
+        limit: int = 100,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> List[PortfolioSnapshotDB]:
+        """
+        Retrieve portfolio snapshots with optional filters.
+        
+        Returns empty list on error (non-blocking).
+        """
+        if not self.client:
+            logger.warning("Cannot query: Supabase client not available")
+            return []
+        
+        try:
+            query = self.client.table("portfolio_snapshots").select("*")
+            
+            if run_id:
+                query = query.eq("run_id", run_id)
+            if strategy_id:
+                query = query.eq("strategy_id", strategy_id)
+            if snapshot_type:
+                query = query.eq("snapshot_type", snapshot_type)
+            if start_date:
+                query = query.gte("timestamp", start_date.isoformat())
+            if end_date:
+                query = query.lte("timestamp", end_date.isoformat())
+            
+            query = query.order("timestamp", desc=True).limit(limit)
+            
+            response = query.execute()
+            return [PortfolioSnapshotDB(**r) for r in response.data]
+        except Exception as e:
+            logger.error(f"Failed to get portfolio snapshots: {e}", exc_info=True)
+            return []
+    
+    def save_data_metadata(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        file_path: str,
+        data_source_id: Optional[str] = None,
+        file_format: str = "json",
+        row_count: Optional[int] = None,
+        quality_status: str = "pending",
+        quality_report_id: Optional[str] = None,
+        checksum: Optional[str] = None,
+    ) -> bool:
+        """
+        Save or update data metadata.
+        
+        Returns True if successful, False otherwise (non-blocking).
+        """
+        if not self.client:
+            logger.debug("Skipping data metadata: Supabase client not available")
+            return False
+        
+        try:
+            metadata_data = {
+                "symbol": symbol,
+                "start_date": start_date.date().isoformat(),
+                "end_date": end_date.date().isoformat(),
+                "data_source_id": data_source_id,
+                "file_path": file_path,
+                "file_format": file_format,
+                "row_count": row_count,
+                "quality_status": quality_status,
+                "quality_report_id": quality_report_id,
+                "checksum": checksum,
+                "last_updated": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            
+            # Check if exists
+            existing = (
+                self.client.table("data_metadata")
+                .select("id, data_version")
+                .eq("symbol", symbol)
+                .eq("start_date", start_date.date().isoformat())
+                .eq("end_date", end_date.date().isoformat())
+                .execute()
+            )
+            
+            if existing.data:
+                # Update existing
+                metadata_id = existing.data[0]["id"]
+                metadata_data["data_version"] = existing.data[0].get("data_version", 1) + 1
+                self.client.table("data_metadata").update(metadata_data).eq("id", metadata_id).execute()
+            else:
+                # Insert new
+                metadata_data["data_version"] = 1
+                metadata_data["created_at"] = datetime.utcnow().isoformat()
+                self.client.table("data_metadata").insert(metadata_data).execute()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save data metadata: {e}", exc_info=True)
+            return False
+    
+    def get_data_metadata(
+        self,
+        symbol: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> List[DataMetadataDB]:
+        """
+        Get data metadata with optional filters.
+        
+        Returns empty list on error (non-blocking).
+        """
+        if not self.client:
+            logger.warning("Cannot query: Supabase client not available")
+            return []
+        
+        try:
+            query = self.client.table("data_metadata").select("*")
+            
+            if symbol:
+                query = query.eq("symbol", symbol)
+            if start_date:
+                query = query.gte("start_date", start_date.date().isoformat())
+            if end_date:
+                query = query.lte("end_date", end_date.date().isoformat())
+            
+            query = query.order("last_updated", desc=True).limit(limit)
+            
+            response = query.execute()
+            return [DataMetadataDB(**row) for row in response.data]
+        except Exception as e:
+            logger.error(f"Failed to get data metadata: {e}", exc_info=True)
             return []
 
 

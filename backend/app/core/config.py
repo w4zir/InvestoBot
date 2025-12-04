@@ -50,6 +50,12 @@ class DataSettings(BaseModel):
     )
     default_lookback_days: int = 365
     source: str = Field(default_factory=lambda: os.getenv("DATA_SOURCE", "synthetic"))  # "synthetic" or "yahoo"
+    # Data management settings
+    cache_enabled: bool = Field(default_factory=lambda: os.getenv("DATA_CACHE_ENABLED", "true").lower() == "true")
+    cache_ttl_hours: int = Field(default_factory=lambda: int(os.getenv("DATA_CACHE_TTL_HOURS", "24")))
+    quality_checks_enabled: bool = Field(default_factory=lambda: os.getenv("DATA_QUALITY_CHECKS_ENABLED", "true").lower() == "true")
+    refresh_schedule: Optional[str] = Field(default_factory=lambda: os.getenv("DATA_REFRESH_SCHEDULE", "0 2 * * *"))  # Daily at 2 AM
+    file_format: str = Field(default_factory=lambda: os.getenv("DATA_FILE_FORMAT", "json"))  # "json" or "parquet"
 
 
 class AppSettings(BaseModel):

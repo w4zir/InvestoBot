@@ -84,14 +84,16 @@ def _load_data_synthetic(universe: List[str], start: datetime, end: datetime) ->
     return data
 
 
-def load_data(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
+def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bool = True) -> Dict[str, List[Dict]]:
     """
     Load OHLCV data from configured source (synthetic or Yahoo Finance).
+    Uses data manager for caching if enabled.
 
     Args:
         universe: List of symbols to load
         start: Start datetime
         end: End datetime
+        use_cache: Whether to use cache (default: True)
 
     Returns:
         Dictionary mapping symbol to list of OHLCV bars
@@ -104,6 +106,33 @@ def load_data(universe: List[str], start: datetime, end: datetime) -> Dict[str, 
         extra={"universe": universe, "start": start.isoformat(), "end": end.isoformat(), "source": source},
     )
 
+    # Try to use data manager for caching
+    if use_cache and settings.data.cache_enabled:
+        try:
+            from app.trading.data_manager import get_data_manager
+            
+            data_manager = get_data_manager()
+            
+            # Define data loader function
+            def _load_from_source(symbols: List[str], start_dt: datetime, end_dt: datetime) -> Dict[str, List[Dict]]:
+                if source == "yahoo":
+                    return _load_data_yahoo(symbols, start_dt, end_dt)
+                else:
+                    return _load_data_synthetic(symbols, start_dt, end_dt)
+            
+            # Use data manager to load (with caching)
+            return data_manager.refresh_data(
+                symbols=universe,
+                start_date=start,
+                end_date=end,
+                force=False,
+                data_loader_func=_load_from_source,
+            )
+        except Exception as e:
+            logger.warning(f"Data manager failed, falling back to direct load: {e}", exc_info=True)
+            # Fall through to direct load
+    
+    # Direct load (no caching or cache disabled)
     if source == "yahoo":
         return _load_data_yahoo(universe, start, end)
     else:

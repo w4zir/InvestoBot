@@ -23,6 +23,7 @@ from app.trading.models import (
     WalkForwardResult,
 )
 from app.trading.order_generator import generate_orders
+from app.trading.persistence import get_persistence_service
 from app.trading.risk_engine import risk_assess
 from app.trading.scenarios import evaluate_gates, list_scenarios
 from app.trading.validation import run_walk_forward_backtest
@@ -39,6 +40,88 @@ def _default_date_range() -> str:
     end = datetime.utcnow().date()
     start = end - timedelta(days=settings.data.default_lookback_days)
     return f"{start.isoformat()}:{end.isoformat()}"
+
+
+def _update_portfolio_after_execution(
+    portfolio: PortfolioState,
+    fills: List[Fill],
+    latest_prices: Dict[str, float],
+) -> PortfolioState:
+    """
+    Update portfolio state after order execution based on fills.
+    
+    Args:
+        portfolio: Current portfolio state
+        fills: List of fills from executed orders
+        latest_prices: Latest prices for calculating position values
+    
+    Returns:
+        Updated PortfolioState
+    """
+    from app.trading.models import PortfolioPosition
+    
+    # Create a dict of current positions for easy lookup
+    positions_dict: Dict[str, PortfolioPosition] = {
+        pos.symbol: pos for pos in portfolio.positions
+    }
+    
+    # Update cash and positions based on fills
+    new_cash = portfolio.cash
+    
+    for fill in fills:
+        symbol = fill.symbol
+        quantity = fill.quantity
+        price = fill.price
+        
+        if fill.side == "buy":
+            # Buying: reduce cash, add/update position
+            cost = quantity * price
+            new_cash -= cost
+            
+            if symbol in positions_dict:
+                # Update existing position (weighted average price)
+                existing = positions_dict[symbol]
+                total_qty = existing.quantity + quantity
+                if total_qty > 0:
+                    avg_price = ((existing.quantity * existing.average_price) + cost) / total_qty
+                    positions_dict[symbol] = PortfolioPosition(
+                        symbol=symbol,
+                        quantity=total_qty,
+                        average_price=avg_price,
+                    )
+                else:
+                    # Position closed, remove it
+                    del positions_dict[symbol]
+            else:
+                # New position
+                positions_dict[symbol] = PortfolioPosition(
+                    symbol=symbol,
+                    quantity=quantity,
+                    average_price=price,
+                )
+        else:  # sell
+            # Selling: increase cash, reduce/remove position
+            proceeds = quantity * price
+            new_cash += proceeds
+            
+            if symbol in positions_dict:
+                existing = positions_dict[symbol]
+                new_qty = existing.quantity - quantity
+                if new_qty > 0:
+                    # Reduce position, keep average price
+                    positions_dict[symbol] = PortfolioPosition(
+                        symbol=symbol,
+                        quantity=new_qty,
+                        average_price=existing.average_price,
+                    )
+                else:
+                    # Position closed, remove it
+                    del positions_dict[symbol]
+    
+    return PortfolioState(
+        cash=new_cash,
+        positions=list(positions_dict.values()),
+    )
 
 
 def _parse_date_range(dr: str) -> tuple[datetime, datetime]:
@@ -112,6 +195,19 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
     for symbol, bars in ohlcv.items():
         if bars:
             latest_prices[symbol] = bars[-1]["close"]
+    
+    # Save initial portfolio snapshot
+    try:
+        persistence = get_persistence_service()
+        persistence.save_portfolio_snapshot(
+            portfolio_state=portfolio,
+            run_id=run_id,
+            snapshot_type="initial",
+            notes="Initial portfolio state at start of strategy run",
+            latest_prices=latest_prices,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save initial portfolio snapshot: {e}", exc_info=True)
 
     # Extract validation and scenario configuration from context
     validation_config_dict = context.get("validation", {})
@@ -206,6 +302,21 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                     f"Gating failed for strategy {spec.strategy_id} but execution allowed due to override flag"
                 )
 
+        # Save pre-execution portfolio snapshot
+        if should_execute and assessment.approved_trades and not execution_blocked:
+            try:
+                persistence = get_persistence_service()
+                persistence.save_portfolio_snapshot(
+                    portfolio_state=portfolio,
+                    run_id=run_id,
+                    strategy_id=spec.strategy_id,
+                    snapshot_type="pre_execution",
+                    notes=f"Portfolio state before executing {len(assessment.approved_trades)} approved orders",
+                    latest_prices=latest_prices,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save pre-execution portfolio snapshot: {e}", exc_info=True)
+        
         # Execute orders if enabled and approved
         fills: List[Fill] = []
         if should_execute and assessment.approved_trades and not execution_blocked:
@@ -222,6 +333,27 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                         f"Executed {len(fills)} orders for strategy {spec.strategy_id}",
                         extra={"strategy_id": spec.strategy_id, "fill_count": len(fills)},
                     )
+                    
+                    # Update portfolio state after execution
+                    portfolio = _update_portfolio_after_execution(portfolio, fills, latest_prices)
+                    logger.info(
+                        f"Updated portfolio after execution: cash={portfolio.cash:.2f}, positions={len(portfolio.positions)}",
+                        extra={"strategy_id": spec.strategy_id},
+                    )
+                    
+                    # Save post-execution portfolio snapshot
+                    try:
+                        persistence = get_persistence_service()
+                        persistence.save_portfolio_snapshot(
+                            portfolio_state=portfolio,
+                            run_id=run_id,
+                            strategy_id=spec.strategy_id,
+                            snapshot_type="post_execution",
+                            notes=f"Portfolio state after executing {len(fills)} fills",
+                            latest_prices=latest_prices,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to save post-execution portfolio snapshot: {e}", exc_info=True)
                 except Exception as e:
                     logger.error(f"Failed to execute orders for strategy {spec.strategy_id}", exc_info=True)
                     execution_error = str(e)

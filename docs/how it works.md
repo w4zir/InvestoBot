@@ -680,7 +680,50 @@ Persistence is handled by:
 
 If Supabase is unavailable, persistence fails gracefully without affecting the strategy run.
 
-### 2.12 Response assembly
+### 2.12 Data Management and Caching
+
+The system includes a comprehensive data management layer for OHLCV market data:
+
+**Data Manager (`backend/app/trading/data_manager.py`)**:
+- **Hybrid storage**: Metadata stored in Supabase database, actual data cached in files (JSON format)
+- **Automatic caching**: Data loaded from source (Yahoo Finance or synthetic) is automatically cached after first load
+- **Cache freshness**: Cached data is used if it's within the TTL (default 24 hours), otherwise refreshed from source
+- **Quality checks**: Data quality validation runs automatically on load, checking for gaps, outliers, OHLC relationships, missing values, and duplicate timestamps
+- **Versioning**: Each dataset has a version number and checksum for change detection
+- **Metadata tracking**: Database tracks file paths, last update times, quality status, and data source information
+
+**Data Quality Checker (`backend/app/trading/data_quality.py`)**:
+- **Gap detection**: Identifies missing dates in time series (configurable threshold)
+- **Outlier detection**: Flags price spikes (>10% daily change) and volume anomalies
+- **OHLC validation**: Ensures high >= low, high >= open/close, low <= open/close
+- **Missing values**: Detects null or NaN values in required fields
+- **Duplicate timestamps**: Identifies duplicate entries
+- **Quality reports**: Generates detailed reports with severity levels and recommendations
+
+**Integration with Market Data**:
+- `load_data()` in `market_data.py` automatically uses the data manager if caching is enabled
+- Cache hit: Loads from file if metadata exists and data is fresh
+- Cache miss: Fetches from source, runs quality checks, saves to cache, updates metadata
+- Force refresh: Can bypass cache for on-demand updates
+
+**API Endpoints** (`/data/*`):
+- `POST /data/refresh`: Trigger on-demand refresh for symbols and date range
+- `GET /data/metadata`: Query data metadata with filters
+- `GET /data/quality/{symbol}`: Get quality report for a dataset
+- `POST /data/validate`: Validate a specific dataset and return quality report
+
+**Scheduled Refresh**:
+- `scheduled_refresh()` function can be called by cron jobs or schedulers
+- Refreshes data for default universe with default lookback period
+- Only updates stale data (respects cache TTL)
+
+**Configuration** (`backend/app/core/config.py`):
+- `DATA_CACHE_ENABLED`: Enable/disable caching (default: true)
+- `DATA_CACHE_TTL_HOURS`: Cache time-to-live in hours (default: 24)
+- `DATA_QUALITY_CHECKS_ENABLED`: Enable/disable quality checks (default: true)
+- `DATA_FILE_FORMAT`: File format for cached data (json or parquet, default: json)
+
+### 2.13 Response assembly
 
 Each candidate is summarized as:
 
@@ -752,6 +795,10 @@ Execution only happens when:
 - **Market data**:
   - Synthetic generator (`DATA_SOURCE=synthetic`) for fast local testing.
   - Yahoo Finance integration via `yfinance` (`DATA_SOURCE=yahoo`).
+  - ✅ Data caching with hybrid storage (metadata in DB, data in files) (implemented).
+  - ✅ Data quality validation (gaps, outliers, OHLC validation) (implemented).
+  - ✅ Data versioning and metadata tracking (implemented).
+  - ✅ On-demand and scheduled data refresh (implemented).
 - **Risk engine**:
   - Per-trade notional and exposure checks.
   - Blacklist support.

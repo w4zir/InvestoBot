@@ -68,6 +68,71 @@ class ExecutionResultDB(BaseModel):
     created_at: datetime
 
 
+class PortfolioSnapshotDB(BaseModel):
+    """Database model for portfolio_snapshots table."""
+    
+    id: UUID
+    run_id: Optional[str] = None
+    strategy_id: Optional[str] = None
+    snapshot_type: str  # 'initial', 'pre_execution', 'post_execution', 'periodic'
+    cash: float
+    positions: List[Dict[str, Any]] = Field(default_factory=list)
+    portfolio_value: float
+    timestamp: datetime
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+class DataSourceDB(BaseModel):
+    """Database model for data_sources table."""
+    
+    id: UUID
+    source_name: str
+    source_type: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class DataMetadataDB(BaseModel):
+    """Database model for data_metadata table."""
+    
+    id: UUID
+    symbol: str
+    start_date: datetime
+    end_date: datetime
+    data_source_id: Optional[UUID] = None
+    file_path: str
+    file_format: str = "json"
+    file_size_bytes: Optional[int] = None
+    row_count: Optional[int] = None
+    last_updated: datetime
+    data_version: int = 1
+    source_version: Optional[str] = None
+    checksum: Optional[str] = None
+    quality_status: str = "pending"
+    quality_report_id: Optional[UUID] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DataQualityReportDB(BaseModel):
+    """Database model for data_quality_reports table."""
+    
+    id: UUID
+    data_metadata_id: UUID
+    overall_status: str  # 'pass', 'warning', 'fail'
+    checks_performed: List[Dict[str, Any]] = Field(default_factory=list)
+    issues_found: List[Dict[str, Any]] = Field(default_factory=list)
+    gap_count: int = 0
+    outlier_count: int = 0
+    validation_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+    checked_at: datetime
+    created_at: datetime
+
+
 class StrategyRunWithDetails(BaseModel):
     """Combined model for a strategy run with all related data."""
     
