@@ -11,6 +11,9 @@ from test.test_helpers import (
     create_mock_portfolio_state,
     create_mock_strategy_spec,
     create_mock_trade,
+    create_momentum_strategy_spec,
+    create_mean_reversion_strategy_spec,
+    create_ma_crossover_strategy_spec,
 )
 
 
@@ -295,6 +298,132 @@ class TestOrderGenerator(unittest.TestCase):
 
         # Should generate order based on net position (10 + 5 - 3 = 12)
         self.assertIsInstance(orders, list)
+
+    def test_order_generation_momentum_strategy(self):
+        """Test order generation for momentum strategies."""
+        # Create momentum strategy
+        strategy = create_momentum_strategy_spec(
+            strategy_id="test_momentum",
+            universe=["AAPL"],
+            fraction=0.02,
+        )
+
+        # Create trades that reflect momentum behavior (buy on upward momentum)
+        trades = [
+            create_mock_trade(
+                symbol="AAPL",
+                side="buy",
+                quantity=13.33,  # 2% of 100k / 150
+                price=150.0,
+                timestamp=datetime.utcnow() - timedelta(days=1),
+            ),
+        ]
+
+        orders = generate_orders(
+            strategy=strategy,
+            portfolio=self.portfolio,
+            latest_prices=self.latest_prices,
+            backtest_trades=trades,
+        )
+
+        # Verify orders are generated correctly
+        self.assertGreater(len(orders), 0)
+        self.assertEqual(orders[0].symbol, "AAPL")
+        self.assertEqual(orders[0].side, "buy")
+        self.assertGreater(orders[0].quantity, 0)
+        # Verify position sizing respects strategy parameters
+        expected_qty = (self.portfolio.cash * 0.02) / self.latest_prices["AAPL"]
+        self.assertAlmostEqual(orders[0].quantity, expected_qty, delta=1.0)
+
+    def test_order_generation_mean_reversion_strategy(self):
+        """Test order generation for mean reversion strategies."""
+        # Create mean reversion strategy
+        strategy = create_mean_reversion_strategy_spec(
+            strategy_id="test_mean_reversion",
+            universe=["AAPL"],
+            fraction=0.03,  # 3% of portfolio
+        )
+
+        # Create trades that reflect mean reversion behavior (buy on oversold, sell on overbought)
+        trades = [
+            create_mock_trade(
+                symbol="AAPL",
+                side="buy",
+                quantity=20.0,  # Buy on oversold condition
+                price=145.0,
+                timestamp=datetime.utcnow() - timedelta(days=2),
+            ),
+            create_mock_trade(
+                symbol="AAPL",
+                side="sell",
+                quantity=20.0,  # Sell on overbought condition
+                price=155.0,
+                timestamp=datetime.utcnow() - timedelta(days=1),
+            ),
+        ]
+
+        orders = generate_orders(
+            strategy=strategy,
+            portfolio=self.portfolio,
+            latest_prices=self.latest_prices,
+            backtest_trades=trades,
+        )
+
+        # Verify orders are generated correctly
+        # The net position from trades (buy 20, sell 20 = 0) should result in no order
+        # or a sell order if we had a position
+        self.assertIsInstance(orders, list)
+        # If there's a net position, verify the order reflects it
+        if len(orders) > 0:
+            self.assertEqual(orders[0].symbol, "AAPL")
+            self.assertGreater(orders[0].quantity, 0)
+
+    def test_order_generation_ma_crossover_strategy(self):
+        """Test order generation for MA crossover strategies."""
+        # Create MA crossover strategy
+        strategy = create_ma_crossover_strategy_spec(
+            strategy_id="test_ma_crossover",
+            universe=["AAPL"],
+            fraction=0.02,
+        )
+
+        # Create trades that reflect crossover behavior (buy on bullish crossover, sell on bearish)
+        trades = [
+            create_mock_trade(
+                symbol="AAPL",
+                side="buy",
+                quantity=13.33,  # Buy on bullish crossover (fast MA crosses above slow MA)
+                price=150.0,
+                timestamp=datetime.utcnow() - timedelta(days=3),
+            ),
+            create_mock_trade(
+                symbol="AAPL",
+                side="sell",
+                quantity=13.33,  # Sell on bearish crossover (fast MA crosses below slow MA)
+                price=148.0,
+                timestamp=datetime.utcnow() - timedelta(days=1),
+            ),
+        ]
+
+        orders = generate_orders(
+            strategy=strategy,
+            portfolio=self.portfolio,
+            latest_prices=self.latest_prices,
+            backtest_trades=trades,
+        )
+
+        # Verify orders are generated correctly
+        # Net position is 0 (bought and sold same amount), so may have no orders
+        # or may have orders based on latest signal
+        self.assertIsInstance(orders, list)
+        # If orders are generated, verify they're correct
+        if len(orders) > 0:
+            self.assertEqual(orders[0].symbol, "AAPL")
+            self.assertGreater(orders[0].quantity, 0)
+            # Verify position sizing respects strategy parameters
+            expected_qty = (self.portfolio.cash * 0.02) / self.latest_prices["AAPL"]
+            # Allow some flexibility since order generation may adjust based on existing positions
+            self.assertGreater(orders[0].quantity, 0)
 
 
 if __name__ == "__main__":

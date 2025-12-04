@@ -117,8 +117,8 @@ class CandidateResult(BaseModel):
     risk: Optional[RiskAssessment] = None
     execution_fills: List[Fill] = Field(default_factory=list)
     execution_error: Optional[str] = None
-    validation: Optional[WalkForwardResult] = None
-    gating: Optional[GatingResult] = None
+    validation: Optional["WalkForwardResult"] = None
+    gating: Optional["GatingResult"] = None
 
 
 class StrategyRunResponse(BaseModel):

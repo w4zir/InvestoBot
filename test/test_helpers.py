@@ -107,6 +107,138 @@ def create_mock_strategy_spec(
     )
 
 
+def create_momentum_strategy_spec(
+    strategy_id: str = "momentum_strategy",
+    universe: Optional[List[str]] = None,
+    fraction: float = 0.02,
+) -> StrategySpec:
+    """
+    Create a momentum strategy specification for testing.
+    
+    Args:
+        strategy_id: Unique strategy identifier
+        universe: List of symbols to trade
+        fraction: Position sizing fraction
+    
+    Returns:
+        StrategySpec object with momentum rules
+    """
+    if universe is None:
+        universe = ["AAPL"]
+    
+    return StrategySpec(
+        strategy_id=strategy_id,
+        name=f"Momentum Strategy {strategy_id}",
+        description="A momentum strategy that buys on upward price momentum",
+        universe=universe,
+        rules=[
+            StrategyRule(
+                type="entry",
+                indicator="momentum",
+                params={"window": 20, "return_threshold": 0.02, "lookback": 5},
+            ),
+            StrategyRule(
+                type="exit",
+                indicator="momentum",
+                params={"window": 20, "return_threshold": -0.01, "lookback": 5},
+            ),
+        ],
+        params=StrategyParams(
+            position_sizing="fixed_fraction",
+            fraction=fraction,
+            timeframe="1d",
+        ),
+    )
+
+
+def create_mean_reversion_strategy_spec(
+    strategy_id: str = "mean_reversion_strategy",
+    universe: Optional[List[str]] = None,
+    fraction: float = 0.02,
+) -> StrategySpec:
+    """
+    Create a mean reversion strategy specification for testing.
+    
+    Args:
+        strategy_id: Unique strategy identifier
+        universe: List of symbols to trade
+        fraction: Position sizing fraction
+    
+    Returns:
+        StrategySpec object with mean reversion rules
+    """
+    if universe is None:
+        universe = ["AAPL"]
+    
+    return StrategySpec(
+        strategy_id=strategy_id,
+        name=f"Mean Reversion Strategy {strategy_id}",
+        description="A mean reversion strategy that buys on oversold conditions",
+        universe=universe,
+        rules=[
+            StrategyRule(
+                type="entry",
+                indicator="zscore",
+                params={"window": 20, "threshold": -2.0, "direction": "below"},
+            ),
+            StrategyRule(
+                type="exit",
+                indicator="zscore",
+                params={"window": 20, "threshold": 0.5, "direction": "above"},
+            ),
+        ],
+        params=StrategyParams(
+            position_sizing="fixed_fraction",
+            fraction=fraction,
+            timeframe="1d",
+        ),
+    )
+
+
+def create_ma_crossover_strategy_spec(
+    strategy_id: str = "ma_crossover_strategy",
+    universe: Optional[List[str]] = None,
+    fraction: float = 0.02,
+) -> StrategySpec:
+    """
+    Create an MA crossover strategy specification for testing.
+    
+    Args:
+        strategy_id: Unique strategy identifier
+        universe: List of symbols to trade
+        fraction: Position sizing fraction
+    
+    Returns:
+        StrategySpec object with MA crossover rules
+    """
+    if universe is None:
+        universe = ["AAPL"]
+    
+    return StrategySpec(
+        strategy_id=strategy_id,
+        name=f"MA Crossover Strategy {strategy_id}",
+        description="A moving average crossover strategy",
+        universe=universe,
+        rules=[
+            StrategyRule(
+                type="entry",
+                indicator="sma_cross",
+                params={"fast": 10, "slow": 20, "direction": "above"},
+            ),
+            StrategyRule(
+                type="exit",
+                indicator="sma_cross",
+                params={"fast": 10, "slow": 20, "direction": "below"},
+            ),
+        ],
+        params=StrategyParams(
+            position_sizing="fixed_fraction",
+            fraction=fraction,
+            timeframe="1d",
+        ),
+    )
+
+
 def create_mock_portfolio_state(
     cash: float = 100000.0,
     positions: Optional[List[PortfolioPosition]] = None,
