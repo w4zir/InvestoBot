@@ -59,16 +59,23 @@ Before starting, ensure you have the following installed:
 
 1. In Supabase Dashboard, go to **SQL Editor**
 2. Click "New query"
-3. Open the unified schema file: `backend/migrations/004_unified_schema.sql`
-4. Copy the entire contents and paste into the SQL editor
-5. Click "Run" (or press Ctrl+Enter)
-6. Verify tables were created:
-   - Go to **Table Editor** → You should see tables like `strategy_runs`, `strategies`, `backtest_results`, etc.
+3. **Run the unified schema** (recommended for new deployments):
+   - Open `backend/migrations/004_unified_schema.sql`
+   - Copy the entire contents and paste into the SQL editor
+   - Click "Run" (or press Ctrl+Enter)
+4. **Add timeframe support**:
+   - Open `backend/migrations/005_add_timeframe_support.sql`
+   - Copy the entire contents and paste into the SQL editor
+   - Click "Run" (or press Ctrl+Enter)
+5. Verify tables were created:
+   - Go to **Table Editor** → You should see tables like:
+     - Core tables: `strategy_runs`, `strategies`, `backtest_results`, `risk_assessments`, `execution_results`, `portfolio_snapshots`
+     - Observability tables: `trades`, `risk_violations`, `fills`, `run_metrics`
+     - Data management tables: `data_sources`, `data_metadata`, `data_quality_reports`
+6. Verify `data_metadata` table has `timeframe` column:
+   - Check that `data_metadata` table includes a `timeframe` column (default: '1d')
 
-**Alternative**: If you prefer to run migrations separately:
-- Run `001_observability_schema.sql` first
-- Then run `002_portfolio_snapshots_schema.sql`
-- Finally run `003_data_management_schema.sql`
+**Note**: The unified schema (`004_unified_schema.sql`) includes all previous migrations. For new deployments, use the unified schema instead of running individual migration files.
 
 ---
 
@@ -422,9 +429,10 @@ npm test
 **Problem**: Foreign key constraint errors
 
 **Solutions**:
-1. Run migrations in correct order (use unified schema)
+1. Run migrations in correct order (use unified schema: `004_unified_schema.sql` then `005_add_timeframe_support.sql`)
 2. Don't use `--clear` if you have existing data with relationships
-3. Check that `data_sources` table has default entries
+3. Check that `data_sources` table has default entries (should be created by unified schema)
+4. Ensure `data_metadata` table has `timeframe` column (from migration 005)
 
 ---
 

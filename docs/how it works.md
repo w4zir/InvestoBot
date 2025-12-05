@@ -64,10 +64,35 @@ uvicorn app.main:app --reload --port 8000
 
 Key endpoints:
 
-- Health: `GET http://localhost:8000/health/`
+**Health & Status:**
+- Health check: `GET http://localhost:8000/health/`
 - Root status: `GET http://localhost:8000/status`
-- Strategy run: `POST http://localhost:8000/strategies/run`
+
+**Strategy Management:**
+- Run strategy: `POST http://localhost:8000/strategies/run`
+- List strategy runs: `GET http://localhost:8000/strategies/history`
+- Get strategy run details: `GET http://localhost:8000/strategies/history/{run_id}`
+- Get strategy history: `GET http://localhost:8000/strategies/history/strategy/{strategy_id}`
+- Get best strategies: `GET http://localhost:8000/strategies/best`
+
+**Trading & Broker:**
 - Trading account: `GET http://localhost:8000/trading/account`
+- Broker health: `GET http://localhost:8000/trading/broker/health`
+- Current positions: `GET http://localhost:8000/trading/broker/current`
+
+**Control & Safety:**
+- Enable kill switch: `POST http://localhost:8000/control/kill-switch/enable`
+- Disable kill switch: `POST http://localhost:8000/control/kill-switch/disable`
+- Kill switch status: `GET http://localhost:8000/control/kill-switch/status`
+- Cancel all orders: `POST http://localhost:8000/control/orders/cancel-all`
+- Get open orders: `GET http://localhost:8000/control/orders/open`
+- Scheduler status: `GET http://localhost:8000/control/scheduler/status`
+
+**Data Management:**
+- Refresh data: `POST http://localhost:8000/data/refresh`
+- Get metadata: `GET http://localhost:8000/data/metadata`
+- Get quality report: `GET http://localhost:8000/data/quality/{symbol}`
+- Validate data: `POST http://localhost:8000/data/validate`
 
 ### 1.4 Run a strategy using curl (backtest + order generation)
 
@@ -752,7 +777,48 @@ This is exactly what you see as the JSON from `/strategies/run`.
 
 ---
 
-## 3. Safety and Execution Controls
+## 3. Database Schema
+
+The system uses a unified database schema stored in Supabase. The schema includes:
+
+### Core Tables
+
+- **strategy_runs**: Main run records with mission, context, and status
+- **strategies**: Individual strategy specifications
+- **backtest_results**: Backtest metrics and trade logs
+- **risk_assessments**: Risk assessment results
+- **execution_results**: Execution fills and errors
+- **portfolio_snapshots**: Portfolio state snapshots over time
+
+### Observability Tables
+
+- **trades**: Individual trade records from backtests
+- **risk_violations**: Risk assessment violations
+- **fills**: Order execution fills
+- **run_metrics**: Aggregated metrics per run
+
+### Data Management Tables
+
+- **data_sources**: Data source configurations (yahoo, synthetic, etc.)
+- **data_metadata**: Metadata about loaded datasets (includes timeframe support)
+- **data_quality_reports**: Quality check results per dataset
+
+### Schema Migration
+
+For new deployments, use the unified schema:
+
+1. Run `backend/migrations/004_unified_schema.sql` in Supabase SQL Editor
+2. Run `backend/migrations/005_add_timeframe_support.sql` to add timeframe support
+
+The unified schema includes all features:
+- Status field for strategy runs (`running`, `completed`, `failed`)
+- Timeframe support for data metadata (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)
+- Observability tables for detailed tracking
+- Data management tables for caching and quality checks
+
+See `backend/migrations/004_unified_schema.sql` for the complete schema definition.
+
+## 4. Safety and Execution Controls
 
 Key safety levers:
 

@@ -243,17 +243,20 @@ def generate_data_metadata() -> List[dict]:
     """Generate data metadata records."""
     metadata = []
     symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+    timeframes = ["1d", "1d", "1d", "1h", "1wk"]  # Mostly daily, some variety
     
     for symbol in symbols:
         start_date = datetime(2024, 1, 1)
         end_date = datetime(2024, 12, 31)
+        timeframe = random.choice(timeframes)
         
         metadata.append({
             "symbol": symbol,
             "start_date": start_date.date().isoformat(),
             "end_date": end_date.date().isoformat(),
             "data_source_id": None,  # Will be set if data_sources exist
-            "file_path": f"data/ohlcv/{symbol}/2024-01-01_2024-12-31.json",
+            "timeframe": timeframe,  # Data timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)
+            "file_path": f"data/ohlcv/{symbol}/2024-01-01_2024-12-31_{timeframe}.json",
             "file_format": "json",
             "file_size_bytes": random.randint(100_000, 1_000_000),
             "row_count": 252,  # Trading days

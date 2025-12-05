@@ -54,19 +54,19 @@ class TestDataManager(unittest.TestCase):
             for i in range(30)
         ]
         
-        # Mock metadata query (no existing metadata)
-        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+        # Mock metadata query (no existing metadata) - includes timeframe
+        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
         
         # Mock data source query
         self.manager.client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         self.manager.client.table.return_value.insert.return_value.execute.return_value.data = [{"id": "source-id-1"}]
         
-        # Save data
-        saved = self.manager.save_data(symbol, test_data, start_date, end_date)
+        # Save data with timeframe
+        saved = self.manager.save_data(symbol, test_data, start_date, end_date, timeframe="1d")
         self.assertTrue(saved)
         
-        # Load data
-        loaded = self.manager.get_cached_data(symbol, start_date, end_date)
+        # Load data with timeframe
+        loaded = self.manager.get_cached_data(symbol, start_date, end_date, timeframe="1d")
         self.assertIsNotNone(loaded)
         self.assertEqual(len(loaded), len(test_data))
     
@@ -76,10 +76,10 @@ class TestDataManager(unittest.TestCase):
         start_date = datetime(2024, 1, 1)
         end_date = datetime(2024, 1, 31)
         
-        # No metadata exists
-        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+        # No metadata exists (includes timeframe in query)
+        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
         
-        cached = self.manager.get_cached_data(symbol, start_date, end_date)
+        cached = self.manager.get_cached_data(symbol, start_date, end_date, timeframe="1d")
         self.assertIsNone(cached)
     
     def test_get_cached_data_stale(self):
@@ -95,6 +95,7 @@ class TestDataManager(unittest.TestCase):
             symbol=symbol,
             start_date=start_date,
             end_date=end_date,
+            timeframe="1d",
             file_path=str(self.data_dir / "ohlcv" / symbol / "test.json"),
             file_format="json",
             last_updated=stale_time,
@@ -104,9 +105,9 @@ class TestDataManager(unittest.TestCase):
             updated_at=stale_time,
         )
         
-        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [metadata.dict()]
+        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [metadata.dict()]
         
-        cached = self.manager.get_cached_data(symbol, start_date, end_date)
+        cached = self.manager.get_cached_data(symbol, start_date, end_date, timeframe="1d")
         # Should return None because cache is stale (TTL is 24 hours)
         self.assertIsNone(cached)
     
@@ -132,12 +133,12 @@ class TestDataManager(unittest.TestCase):
                 for sym in syms
             }
         
-        # Mock no existing cache
-        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+        # Mock no existing cache (includes timeframe in query)
+        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
         self.manager.client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         self.manager.client.table.return_value.insert.return_value.execute.return_value.data = [{"id": "source-id-1"}]
         
-        refreshed = self.manager.refresh_data(symbols, start_date, end_date, force=False, data_loader_func=mock_loader)
+        refreshed = self.manager.refresh_data(symbols, start_date, end_date, force=False, data_loader_func=mock_loader, timeframe="1d")
         
         self.assertEqual(len(refreshed), len(symbols))
         self.assertIn("AAPL", refreshed)
@@ -155,6 +156,7 @@ class TestDataManager(unittest.TestCase):
             "symbol": symbol,
             "start_date": start_date.date().isoformat(),
             "end_date": end_date.date().isoformat(),
+            "timeframe": "1d",
             "file_path": "data/ohlcv/AAPL/test.json",
             "file_format": "json",
             "last_updated": datetime.utcnow().isoformat(),
@@ -164,11 +166,12 @@ class TestDataManager(unittest.TestCase):
             "updated_at": datetime.utcnow().isoformat(),
         }
         
-        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [metadata_dict]
+        self.manager.client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = [metadata_dict]
         
-        metadata = self.manager.get_data_metadata(symbol, start_date, end_date)
+        metadata = self.manager.get_data_metadata(symbol, start_date, end_date, timeframe="1d")
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata.symbol, symbol)
+        self.assertEqual(metadata.timeframe, "1d")
 
 
 if __name__ == "__main__":
