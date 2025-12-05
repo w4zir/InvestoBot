@@ -48,8 +48,10 @@ Before starting, ensure you have the following installed:
 1. In your Supabase project, go to **Settings** → **API**
 2. Copy the following values:
    - **Project URL** (e.g., `https://xxxxx.supabase.co`)
-   - **anon/public key** (starts with `eyJ...`)
-   - **service_role key** (keep this secret!)
+   - **anon/public key** (starts with `eyJ...`) - Used for frontend authentication
+   - **service_role key** (keep this secret!) - **REQUIRED for backend database operations**
+
+**Important**: The backend requires `SUPABASE_SERVICE_KEY` (service_role key) to write to the database. The service_role key bypasses Row Level Security (RLS), allowing the backend to perform all database operations without permission errors.
 
 3. Go to **Settings** → **Database**
 4. Copy the **Connection string** (under "Connection string" → "URI")
@@ -67,12 +69,19 @@ Before starting, ensure you have the following installed:
    - Open `backend/migrations/005_add_timeframe_support.sql`
    - Copy the entire contents and paste into the SQL editor
    - Click "Run" (or press Ctrl+Enter)
-5. Verify tables were created:
+5. **Configure Row Level Security (RLS) - Optional**:
+   - **If using `SUPABASE_SERVICE_KEY` (recommended)**: You can skip this step. Service_role key bypasses RLS.
+   - **If using `SUPABASE_KEY` (anon key)**: You must run RLS policies:
+     - Open `backend/migrations/006_rls_policies.sql`
+     - Copy the entire contents and paste into the SQL editor
+     - Click "Run" (or press Ctrl+Enter)
+     - This creates policies to allow anon role to perform database operations
+6. Verify tables were created:
    - Go to **Table Editor** → You should see tables like:
      - Core tables: `strategy_runs`, `strategies`, `backtest_results`, `risk_assessments`, `execution_results`, `portfolio_snapshots`
      - Observability tables: `trades`, `risk_violations`, `fills`, `run_metrics`
      - Data management tables: `data_sources`, `data_metadata`, `data_quality_reports`
-6. Verify `data_metadata` table has `timeframe` column:
+7. Verify `data_metadata` table has `timeframe` column:
    - Check that `data_metadata` table includes a `timeframe` column (default: '1d')
 
 **Note**: The unified schema (`004_unified_schema.sql`) includes all previous migrations. For new deployments, use the unified schema instead of running individual migration files.
@@ -138,8 +147,8 @@ GOOGLE_LOCATION=global
 
 # Supabase Database
 SUPABASE_URL=https://xxxxx.supabase.co
-SUPABASE_KEY=your_anon_key_here
-SUPABASE_SERVICE_KEY=your_service_role_key_here
+SUPABASE_SERVICE_KEY=your_service_role_key_here  # REQUIRED for backend - bypasses RLS
+SUPABASE_KEY=your_anon_key_here  # Optional - only needed if not using service_role key
 
 # Alpaca Paper Trading (optional)
 ALPACA_API_KEY=your_alpaca_key

@@ -5,6 +5,7 @@ Provides client management, JSONB helpers, and error handling.
 import json
 import os
 import logging
+import base64
 from functools import wraps
 from typing import Any, Dict, Optional
 from supabase import create_client, Client
@@ -53,23 +54,89 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
     return decorator
 
 
+def _detect_key_type(key: str) -> str:
+    """
+    Detect if Supabase key is service_role or anon based on JWT payload.
+    
+    Args:
+        key: Supabase API key (JWT token)
+        
+    Returns:
+        'service_role' or 'anon'
+    """
+    try:
+        # JWT tokens have 3 parts separated by dots: header.payload.signature
+        parts = key.split('.')
+        if len(parts) != 3:
+            return 'unknown'
+        
+        # Decode payload (second part)
+        payload = parts[1]
+        # Add padding if needed for base64 decoding
+        padding = 4 - len(payload) % 4
+        if padding != 4:
+            payload += '=' * padding
+        
+        decoded = base64.urlsafe_b64decode(payload)
+        claims = json.loads(decoded)
+        
+        # Check the 'role' claim
+        role = claims.get('role', '')
+        if role == 'service_role':
+            return 'service_role'
+        elif role == 'anon' or role == 'authenticated':
+            return 'anon'
+        else:
+            return 'unknown'
+    except Exception:
+        # If we can't decode, assume unknown
+        return 'unknown'
+
+
 def get_supabase_client() -> Optional[Client]:
     """
     Create and return Supabase client instance.
+    
+    Prefers SUPABASE_SERVICE_KEY over SUPABASE_KEY (anon key).
+    Logs which key type is being used and warns if anon key is used.
     
     Returns:
         Supabase Client instance or None if connection fails
     """
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
+    service_key = os.getenv("SUPABASE_SERVICE_KEY")
+    anon_key = os.getenv("SUPABASE_KEY")
+    
+    # Prefer service_role key, fallback to anon key
+    supabase_key = service_key or anon_key
+    key_source = "SUPABASE_SERVICE_KEY" if service_key else "SUPABASE_KEY"
     
     if not supabase_url or not supabase_key:
-        logger.warning("Supabase credentials not found. Check SUPABASE_URL and SUPABASE_SERVICE_KEY in .env")
+        logger.warning(
+            "Supabase credentials not found. Check SUPABASE_URL and SUPABASE_SERVICE_KEY in .env. "
+            "SUPABASE_SERVICE_KEY is required for backend database operations."
+        )
         return None
     
     if not supabase_url.startswith("http"):
         logger.error(f"Invalid SUPABASE_URL format: {supabase_url}. Should start with http:// or https://")
         return None
+    
+    # Detect key type
+    key_type = _detect_key_type(supabase_key)
+    
+    # Log key type being used
+    if key_type == 'service_role':
+        logger.info(f"Using Supabase service_role key (from {key_source}) - RLS bypassed")
+    elif key_type == 'anon':
+        logger.warning(
+            f"Using Supabase anon key (from {key_source}) - RLS policies required! "
+            "Backend operations may fail with permission errors. "
+            "Set SUPABASE_SERVICE_KEY in backend/.env for proper access. "
+            "If you must use anon key, ensure RLS policies are configured (see migration 006_rls_policies.sql)."
+        )
+    else:
+        logger.warning(f"Could not determine Supabase key type - using key from {key_source}")
     
     try:
         logger.info(f"Creating Supabase client with URL: {supabase_url[:30]}...")
@@ -138,12 +205,17 @@ class Database:
     def __init__(self):
         self.client = get_supabase_client()
         self._init_error = None
+        self._key_type = None
         
         if not self.client:
             try:
                 supabase_url = os.getenv("SUPABASE_URL")
-                supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
+                service_key = os.getenv("SUPABASE_SERVICE_KEY")
+                anon_key = os.getenv("SUPABASE_KEY")
+                supabase_key = service_key or anon_key
+                
                 if supabase_url and supabase_key:
+                    self._key_type = _detect_key_type(supabase_key)
                     test_client = create_client(supabase_url, supabase_key)
             except Exception as e:
                 self._init_error = str(e)

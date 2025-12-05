@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { getAccountStatus, AccountStatus, PortfolioPosition } from '@/api/backend'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, AlertTriangle } from 'lucide-react'
 
 export default function LivePositions() {
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null)
@@ -73,7 +74,43 @@ export default function LivePositions() {
     return null
   }
 
-  const { account, portfolio } = accountStatus
+  const { account, portfolio, broker_available, message } = accountStatus
+  
+  // Handle case when broker is unavailable
+  if (broker_available === false) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Account Status</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              {message || 'Broker is not configured or unavailable. Please configure Alpaca API keys in backend/.env to view account status.'}
+            </AlertDescription>
+          </Alert>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  // Handle case when account is null (shouldn't happen if broker is available, but defensive)
+  if (!account) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Account Status</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-8">
+            <p className="text-muted-foreground">No account data available</p>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
   const accountEquity = parseFloat(account.equity || account.cash || '0')
   const accountCash = parseFloat(account.cash || '0')
   const buyingPower = parseFloat(account.buying_power || account.cash || '0')

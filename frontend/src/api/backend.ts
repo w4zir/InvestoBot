@@ -110,8 +110,10 @@ export interface PortfolioState {
 }
 
 export interface AccountStatus {
-  account: Record<string, any>;
+  account: Record<string, any> | null;
   portfolio: PortfolioState;
+  broker_available?: boolean;
+  message?: string;
 }
 
 // API functions

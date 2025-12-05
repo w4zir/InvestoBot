@@ -371,9 +371,24 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                         )
                     except Exception as e:
                         logger.warning(f"Failed to save post-execution portfolio snapshot: {e}", exc_info=True)
+                except RuntimeError as e:
+                    # Broker is unavailable (e.g., Alpaca not configured)
+                    error_msg = str(e)
+                    if "No available broker" in error_msg:
+                        execution_error = (
+                            "Broker is not configured or unavailable. "
+                            "Please configure Alpaca API keys (ALPACA_API_KEY, ALPACA_SECRET_KEY) "
+                            "in backend/.env to execute trades. Using paper trading keys is recommended."
+                        )
+                    else:
+                        execution_error = f"Broker error: {error_msg}"
+                    logger.warning(
+                        f"Cannot execute orders for strategy {spec.strategy_id}: broker unavailable",
+                        extra={"strategy_id": spec.strategy_id, "error": error_msg}
+                    )
                 except Exception as e:
                     logger.error(f"Failed to execute orders for strategy {spec.strategy_id}", exc_info=True)
-                    execution_error = str(e)
+                    execution_error = f"Execution failed: {str(e)}"
 
         candidates.append(
             CandidateResult(
