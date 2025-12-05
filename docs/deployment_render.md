@@ -71,13 +71,36 @@ Once deployed, your API will be available at:
 - `https://your-service-name.onrender.com`
 
 **Key Endpoints:**
+
+**Strategy Management:**
 - `POST /strategies/run` - Run a strategy manually
+- `GET /strategies/history` - List all strategy runs
+- `GET /strategies/history/{run_id}` - Get details of a specific run
+- `GET /strategies/history/strategy/{strategy_id}` - Get history for a specific strategy
+- `GET /strategies/best` - Get best performing strategies across runs
+
+**Control & Safety:**
 - `GET /control/kill-switch/status` - Check kill switch status
 - `POST /control/kill-switch/enable` - Enable kill switch
 - `POST /control/kill-switch/disable` - Disable kill switch
 - `POST /control/orders/cancel-all` - Cancel all open orders
 - `GET /control/orders/open` - List open orders
 - `GET /control/scheduler/status` - Check scheduler status
+
+**Trading Status:**
+- `GET /trading/account` - Get Alpaca account and portfolio status
+- `GET /trading/broker/health` - Check broker connection health
+- `GET /trading/broker/current` - Get current positions
+
+**Data Management:**
+- `POST /data/refresh` - Refresh market data for symbols
+- `GET /data/metadata` - Get data metadata
+- `GET /data/quality/{symbol}` - Get data quality report for a symbol
+- `POST /data/validate` - Validate data quality
+
+**Health & Status:**
+- `GET /health/` - Health check endpoint
+- `GET /status` - Basic application status
 
 ## Kill Switch Usage
 
@@ -99,6 +122,9 @@ curl -X POST https://your-service.onrender.com/control/kill-switch/disable
 1. **Logs**: View logs in Render dashboard for each service
 2. **Cron Jobs**: Check cron job logs to see scheduled run results
 3. **API Health**: Use `/health/` endpoint to check service status
+4. **Strategy History**: Query `/strategies/history` to review past runs and performance
+5. **Broker Health**: Monitor `/trading/broker/health` to ensure Alpaca connection is active
+6. **Data Quality**: Check `/data/quality/{symbol}` to monitor data integrity
 
 ## Troubleshooting
 

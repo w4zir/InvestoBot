@@ -87,15 +87,39 @@ GoogleAgentClient
 
 - **Strategy Planning Method**
   - `plan_strategy(mission: str, context: Dict[str, Any])` method
-  - Constructs structured prompt for strategy generation
+  - Constructs enhanced prompt with risk constraints, template references, and few-shot examples
   - Calls `models.generate_content()` with user message
-  - Extracts text from response candidates
-  - Returns `{"raw_text": <model_output>}`
+  - Extracts and validates JSON from response (handles markdown code blocks)
+  - Returns `{"raw_text": <model_output>, "validated_json": <json_string>, "token_usage": {...}}`
 
-- **Error Handling**
-  - Catches exceptions during response parsing
-  - Logs errors with context
-  - Raises `RuntimeError` on invalid responses
+- **Response Parsing & Validation** ✅
+  - JSON extraction from markdown code blocks or plain text
+  - JSON syntax validation at client level
+  - Structure validation (ensures "strategies" key exists and is a list)
+  - Returns validated JSON string for downstream processing
+
+- **Retry Logic & Error Handling** ✅
+  - Exponential backoff retry strategy (3 attempts, 2-10 second waits)
+  - Retries on `RuntimeError` (rate limits, transient failures)
+  - Specific error handling for rate limits (429), quota errors, and API key issues
+  - Comprehensive error logging with context
+
+- **Prompt Engineering** ✅
+  - Enhanced prompt with risk constraints section
+  - Strategy template references from template registry
+  - Few-shot examples from templates
+  - Prompt versioning support (via `GOOGLE_PROMPT_VERSION` config)
+  - Structured prompt templates with version metadata
+
+- **Token Usage Tracking** ✅
+  - Extracts token usage from API response (`usage_metadata`)
+  - Tracks input tokens (`prompt_token_count`) and output tokens (`candidates_token_count`)
+  - Returns token usage in response for cost tracking
+  - `get_token_usage()` method to retrieve last call's token usage
+
+- **Health Checks** ✅
+  - `health_check()` method for connection health
+  - `get_health_status()` returns detailed status (provider, model, prompt_version)
 
 - **Singleton Pattern**
   - Global `_client_instance` variable
@@ -103,31 +127,18 @@ GoogleAgentClient
 
 #### ❌ Missing / Incomplete
 
-- **Response Parsing**
-  - Currently returns raw text; JSON parsing delegated to `strategy_planner`
-  - No validation of response structure at this layer
-  - No retry logic for API failures
-
-- **Prompt Engineering**
-  - Very basic prompt template
-  - No few-shot examples or system instructions
-  - No prompt versioning or A/B testing
-
 - **Streaming Support**
   - No support for streaming responses
   - No partial result handling
 
-- **Token Usage Tracking**
-  - No tracking of input/output tokens
-  - No cost estimation or budgeting
+- **Provider Abstraction**
+  - Currently hard-coded to Google GenAI
+  - Infrastructure exists for provider switching (config added), but not fully implemented
+  - LLM provider interface and settings exist, but Google client doesn't implement interface yet
 
-- **Rate Limiting**
-  - No built-in rate limiting
-  - No backoff/retry strategies
-
-- **Alternative LLM Providers**
-  - Hard-coded to Google GenAI
-  - No abstraction for switching providers (OpenAI, Anthropic, etc.)
+- **Cost Budgeting**
+  - Token usage tracked but no automatic cost limits or budgeting
+  - No cost estimation per request
 
 - **Agent-Specific Methods**
   - Only `plan_strategy()` implemented
@@ -178,24 +189,38 @@ generate_strategy_specs(mission, context)
   - Ensures required fields present (strategy_id, rules, params, etc.)
   - Filters out invalid strategies but continues processing
 
+- **Strategy Quality Checks** ✅
+  - `_validate_strategy_constraints()` validates:
+    - Position sizing fraction bounds (0.01 to 0.05)
+    - Blacklisted symbols in universe
+    - Non-empty universe and rules
+  - `_fix_strategy_constraints()` automatically fixes common violations:
+    - Clamps fraction to valid range
+    - Removes blacklisted symbols from universe
+    - Adds default symbols if universe becomes empty
+
+- **Strategy Diversity** ✅
+  - `_ensure_strategy_diversity()` checks for duplicate strategy IDs
+  - `_calculate_strategy_similarity()` computes similarity score (0.0-1.0) based on:
+    - Universe overlap
+    - Rule count and types
+    - Indicator matching
+  - Logs warnings for strategies with >90% similarity
+  - Soft check (warns but doesn't remove strategies)
+
+- **Strategy Templates** ✅
+  - Template registry system (`strategy_templates.py`)
+  - Predefined templates: volatility breakout, pairs trading, intraday mean-reversion
+  - Templates integrated into Google Agent Client prompts
+  - LLM can reference templates for structured strategy generation
+  - Template examples provided as few-shot learning
+
 #### ❌ Missing / Incomplete
-
-- **Strategy Quality Checks**
-  - No validation of strategy logic (e.g., valid indicators, reasonable parameters)
-  - No check for conflicting rules
-  - No minimum/maximum parameter bounds
-
-- **Strategy Diversity**
-  - No mechanism to ensure diverse strategies (different types, timeframes)
-  - No deduplication of similar strategies
 
 - **Context Enhancement**
   - Doesn't enrich context with market data, recent performance, etc.
   - No memory/RAG integration for past strategy performance
-
-- **Strategy Templates**
-  - No predefined strategy templates that LLM can instantiate
-  - No validation against known strategy patterns
+  - No market regime information included
 
 - **Fallback Strategies**
   - If LLM fails, no fallback to hardcoded strategies
@@ -204,6 +229,7 @@ generate_strategy_specs(mission, context)
 - **Strategy Ranking/Scoring**
   - No initial scoring before backtesting
   - No prioritization of strategies to backtest
+  - All strategies processed equally
 
 - **Multi-Agent Collaboration**
   - Single agent approach; could benefit from:
@@ -312,9 +338,12 @@ run_strategy_run(payload: StrategyRunRequest)
   - No mechanism to learn from execution results
   - No adjustment of strategies based on live performance
 
-- **Run History / Persistence**
-  - Run results not persisted to database
-  - No way to query past runs or compare strategies
+- **Run History / Persistence** ✅
+  - Run results persisted to database (Supabase) via `persistence.py`
+  - Run history query endpoints: `/strategies/history`, `/strategies/history/{run_id}`
+  - Strategy-specific history: `/strategies/history/strategy/{strategy_id}`
+  - Best strategies endpoint: `/strategies/best` for cross-run comparison
+  - Run replay capability not yet implemented
 
 - **Real-Time Updates**
   - No streaming of progress updates
@@ -414,14 +443,27 @@ Agents could communicate via events/messages, enabling:
 
 ### ✅ Fully Implemented
 
-1. **Google Agent Client** - Basic LLM integration
-2. **Strategy Planner Agent** - Strategy generation and validation
-3. **Trading Orchestrator Agent** - Complete end-to-end pipeline with order generation and execution
+1. **Google Agent Client** - Enhanced LLM integration with:
+   - JSON validation and extraction
+   - Retry logic with exponential backoff
+   - Enhanced prompt engineering (templates, few-shot examples, versioning)
+   - Token usage tracking
+   - Health checks
+2. **Strategy Planner Agent** - Strategy generation with:
+   - Quality checks (fraction bounds, blacklist validation)
+   - Strategy diversity checking and similarity detection
+   - Strategy templates integration
+   - Automatic constraint fixing
+3. **Trading Orchestrator Agent** - Complete end-to-end pipeline with:
+   - Order generation and execution
+   - Run persistence to database
+   - Strategy history and comparison endpoints
 4. **Order Generation** - Signal-to-order translation with position sizing (`backend/app/trading/order_generator.py`)
 5. **Backtester** - Medium-complexity implementation with real indicators and metrics (`backend/app/trading/backtester.py`)
-6. **Market Data** - Supports both synthetic and Yahoo Finance data sources
+6. **Market Data** - Supports both synthetic and Yahoo Finance data sources with quality validation
 7. **Risk Engine** - Enhanced with portfolio exposure checks and latest price integration
 8. **Execution Flow** - Complete Alpaca integration with safety guards and error handling
+9. **Run Persistence** - Database storage and query endpoints for strategy run history
 
 ### ⚠️ Partially Implemented
 
@@ -444,9 +486,15 @@ Agents could communicate via events/messages, enabling:
 ## Next Steps for Agent Development
 
 1. **Enhance Strategy Planner**
-   - Add strategy templates
-   - Implement quality checks
-   - Add fallback strategies
+   - ✅ Strategy templates (implemented)
+   - ✅ Quality checks (implemented)
+   - Add fallback strategies (static library for LLM failures)
+   - Add context enrichment (market data, performance history)
+
+2. **Provider Abstraction**
+   - Implement LLM provider interface for Google client
+   - Add OpenAI and Anthropic client implementations
+   - Enable provider failover mechanism
 
 3. **Upgrade Risk Engine to Agent**
    - Add reasoning capabilities
@@ -454,9 +502,10 @@ Agents could communicate via events/messages, enabling:
    - Add scenario analysis
 
 4. **Add Memory Agent**
-   - Store strategy history
+   - Store strategy history (partially done via persistence)
    - Implement RAG for strategy retrieval
    - Learn from past performance
+   - Strategy recommendation based on context
 
 5. **Implement Strategy Critic**
    - Review strategies before backtesting
@@ -468,13 +517,19 @@ Agents could communicate via events/messages, enabling:
    - Log all agent interactions
    - Create agent performance dashboard
 
+7. **Strategy Selection & Ranking**
+   - Implement initial scoring before backtesting
+   - Add strategy comparison metrics
+   - Select "best" strategy from candidates
+
 ---
 
 ## Notes
 
 - All agents are currently **stateless** (except singleton clients)
 - No agent-to-agent direct communication (all via Orchestrator)
-- Agent decisions are logged but not persisted
-- No agent versioning or A/B testing
-- No agent health checks or monitoring
+- Agent decisions are logged and run results are persisted to database
+- Prompt versioning supported (via config), but full A/B testing infrastructure pending
+- Health checks implemented for Google Agent Client
+- Token usage tracked for cost monitoring
 
