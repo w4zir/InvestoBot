@@ -66,6 +66,14 @@ class LLMProviderSettings(BaseModel):
 class RiskSettings(BaseModel):
     max_trade_notional: float = Field(default=10_000.0)
     max_portfolio_exposure: float = Field(default=0.5)
+    max_position_per_symbol: float = Field(default=0.2)  # Max 20% of portfolio per symbol
+    max_drawdown_threshold: float = Field(default=0.15)  # 15% max drawdown before blocking trades
+    max_correlation_exposure: float = Field(default=0.4)  # Max 40% exposure to correlated assets
+    correlation_threshold: float = Field(default=0.7)  # Correlation threshold for grouping
+    min_avg_volume: float = Field(default=1_000_000)  # Min average daily volume in dollars
+    min_volume_ratio: float = Field(default=0.1)  # Max order size / ADV ratio (10%)
+    var_confidence_level: float = Field(default=0.95)  # 95% VaR confidence level
+    var_horizon_days: int = Field(default=1)  # 1-day VaR horizon
     blacklist_symbols: List[str] = Field(default_factory=list)
 
 

@@ -276,14 +276,30 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
             extra={"strategy_id": spec.strategy_id, "order_count": len(proposed_orders)},
         )
 
-        # Risk assessment
-        assessment = risk_assess(portfolio=portfolio, proposed_trades=proposed_orders, latest_prices=latest_prices)
+        # Risk assessment with enhanced context (equity curve and historical data)
+        use_agent = context.get("use_risk_agent", False)  # Optional: enable agent-based risk assessment
+        assessment = risk_assess(
+            portfolio=portfolio,
+            proposed_trades=proposed_orders,
+            latest_prices=latest_prices,
+            equity_curve=backtest_result.equity_curve,  # Pass equity curve for drawdown calculation
+            historical_data=ohlcv,  # Pass historical data for correlation and liquidity checks
+            use_agent=use_agent,
+        )
         logger.info(
-            f"Risk assessment for strategy {spec.strategy_id}: {len(assessment.approved_trades)} approved, {len(assessment.violations)} violations",
+            f"Risk assessment for strategy {spec.strategy_id}: {len(assessment.approved_trades)} approved, "
+            f"{len(assessment.violations)} violations, {len(assessment.warnings)} warnings, "
+            f"risk_level={assessment.risk_level.value}, risk_score={assessment.risk_score}",
             extra={
                 "strategy_id": spec.strategy_id,
                 "approved_count": len(assessment.approved_trades),
                 "violations_count": len(assessment.violations),
+                "warnings_count": len(assessment.warnings),
+                "risk_level": assessment.risk_level.value,
+                "risk_score": assessment.risk_score,
+                "drawdown_blocked": assessment.drawdown_blocked,
+                "current_drawdown": assessment.current_drawdown,
+                "var_estimate": assessment.var_estimate,
             },
         )
 

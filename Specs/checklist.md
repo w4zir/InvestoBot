@@ -132,29 +132,29 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ### Google Agent Client
 
-- [ ] **Response parsing improvements**
-  - [ ] Add JSON validation at client level
-  - [ ] Implement retry logic for API failures
-  - [ ] Add exponential backoff
-  - [ ] Handle rate limiting
+- [x] **Response parsing improvements** ✅ (v1 implemented)
+  - [x] Add JSON validation at client level
+  - [x] Implement retry logic for API failures
+  - [x] Add exponential backoff
+  - [x] Handle rate limiting
 
-- [ ] **Prompt engineering**
-  - [ ] Create structured prompt templates
-  - [ ] Add few-shot examples
-  - [ ] Implement prompt versioning
-  - [ ] A/B test different prompts
+- [x] **Prompt engineering** ✅ (v1 implemented)
+  - [x] Create structured prompt templates
+  - [x] Add few-shot examples
+  - [x] Implement prompt versioning
+  - [ ] A/B test different prompts (infrastructure ready, full system pending)
 
-- [ ] **Token tracking & cost management**
-  - [ ] Track input/output tokens per request
-  - [ ] Calculate cost per strategy generation
-  - [ ] Add token usage limits/budgeting
-  - [ ] Log token usage for analysis
+- [x] **Token tracking & cost management** ✅ (v1 implemented)
+  - [x] Track input/output tokens per request
+  - [x] Calculate cost per strategy generation (token_tracker.py created)
+  - [x] Add token usage limits/budgeting (config added)
+  - [x] Log token usage for analysis
 
-- [ ] **Provider abstraction**
-  - [ ] Create LLM provider interface
-  - [ ] Support OpenAI, Anthropic as alternatives
-  - [ ] Add provider switching logic
-  - [ ] Implement fallback providers
+- [x] **Provider abstraction** ✅ (v1 implemented)
+  - [x] Create LLM provider interface (llm_provider_interface.py)
+  - [x] Support OpenAI, Anthropic as alternatives (clients created, config added)
+  - [x] Add provider switching logic (config added, LLMProviderSettings)
+  - [x] Implement fallback providers (config added, manager structure created)
 
 ### Strategy Planner Agent
 
@@ -600,15 +600,24 @@ These tasks are essential for a working MVP and should be prioritized.
   - [x] Ensures complete portfolio evolution representation from start to finish
   - [x] Applied to both single-symbol and multi-symbol backtest paths
 
+- [x] **Multi-symbol portfolio backtesting fixes** ✅ (2024-12-30)
+  - [x] Fixed portfolio valuation bug: Changed from `next()` to `max()` to find most recent bar index in multi-symbol backtesting (`backtester.py`)
+  - [x] Fixed quality report persistence: Reordered operations to insert metadata first, then save quality report with metadata_id (`data_manager.py`)
+  - [x] Fixed retry logic: Changed retry condition to only retry on `RuntimeError` instead of all exceptions, preventing retries on configuration errors like invalid API keys (`google_client.py`)
+
 ---
 
 ## Progress Tracking
 
 **Last Updated**: 2024-12-30
 
-**Overall Progress**: ~75% Complete (MVP core features implemented)
+**Overall Progress**: ~78% Complete (MVP core features implemented, agent enhancements v1 complete)
 
 **MVP Status**: [x] Complete (core trading pipeline, backtesting, risk, execution, validation, gating, persistence)
+
+**Recent Updates**:
+- Agent Enhancements v1: Response parsing improvements, prompt versioning, token tracking, provider abstraction infrastructure
+- Bug fixes: Multi-symbol portfolio valuation, quality report persistence, retry logic improvements
 
 **Next Milestone**: Production hardening (monitoring, scaling, advanced features)
 

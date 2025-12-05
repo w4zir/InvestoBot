@@ -102,9 +102,25 @@ class Fill(BaseModel):
     timestamp: datetime
 
 
+class RiskLevel(str, Enum):
+    """Risk level classification."""
+    SAFE = "safe"
+    CAUTION = "caution"
+    WARNING = "warning"
+    BLOCK = "block"
+
+
 class RiskAssessment(BaseModel):
     approved_trades: List[Order] = Field(default_factory=list)
     violations: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)  # Non-blocking warnings
+    drawdown_blocked: bool = False  # True if trading blocked due to drawdown
+    current_drawdown: Optional[float] = None  # Current portfolio drawdown (0-1)
+    var_estimate: Optional[float] = None  # VaR estimate in dollars
+    risk_score: Optional[float] = None  # Overall risk score (0-1, higher = riskier)
+    reasoning: Optional[str] = None  # Reasoning for agent-based decisions
+    risk_level: RiskLevel = RiskLevel.SAFE  # Risk level classification
+    adjusted_trades: List[Order] = Field(default_factory=list)  # Size-reduced trades for CAUTION/WARNING levels
 
 
 class StrategyRunRequest(BaseModel):
