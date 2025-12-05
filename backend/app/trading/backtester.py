@@ -460,6 +460,7 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
         )
 
     # For backward compatibility: if only one symbol and PER_SYMBOL mode, use simplified logic
+    timeline = None  # Initialize timeline for single-symbol path
     if len(universe) == 1 and evaluation_mode == PortfolioEvaluationMode.PER_SYMBOL:
         # Use original single-symbol logic for backward compatibility
         primary_symbol = universe[0]
@@ -612,6 +613,11 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
             final_portfolio_value += remaining_quantity * final_price
         portfolio_values.append(final_portfolio_value)
         equity_timestamps.append(timestamps[-1])
+        
+        # Set timeline to None to indicate single-symbol path was used
+        # This prevents NameError in shared code below
+        # Note: Final portfolio value already calculated above, so shared code will skip it
+        timeline = None
 
     else:
         # Multi-symbol portfolio logic
@@ -849,16 +855,20 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
                         )
                     )
 
-    # Calculate final portfolio value
-    final_portfolio_value = cash
-    final_timestamp = timeline[-1][0] if timeline else datetime.utcnow()
-    for symbol, pos_info in positions.items():
-        bars = ohlcv_data.get(symbol, [])
-        if bars:
-            final_price = bars[-1]["close"]
-            final_portfolio_value += pos_info.get("quantity", 0.0) * final_price
-    portfolio_values.append(final_portfolio_value)
-    equity_timestamps.append(final_timestamp)
+    # Calculate final portfolio value (only for multi-symbol path)
+    # Single-symbol path already calculated this above
+    if timeline is not None:
+        # Multi-symbol path: calculate final portfolio value
+        final_portfolio_value = cash
+        final_timestamp = timeline[-1][0] if timeline else datetime.utcnow()
+        for symbol, pos_info in positions.items():
+            bars = ohlcv_data.get(symbol, [])
+            if bars:
+                final_price = bars[-1]["close"]
+                final_portfolio_value += pos_info.get("quantity", 0.0) * final_price
+        portfolio_values.append(final_portfolio_value)
+        equity_timestamps.append(final_timestamp)
+    # Single-symbol path: final portfolio value already calculated and appended above
 
     # Calculate metrics
     if len(portfolio_values) < 2:

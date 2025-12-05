@@ -609,15 +609,17 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ## Progress Tracking
 
-**Last Updated**: 2024-12-30
+**Last Updated**: 2025-01-02
 
-**Overall Progress**: ~78% Complete (MVP core features implemented, agent enhancements v1 complete)
+**Overall Progress**: ~82% Complete (MVP core features implemented, agent enhancements v1 complete, run persistence added)
 
-**MVP Status**: [x] Complete (core trading pipeline, backtesting, risk, execution, validation, gating, persistence)
+**MVP Status**: [x] Complete (core trading pipeline, backtesting, risk, execution, validation, gating, persistence, strategy history)
 
 **Recent Updates**:
 - Agent Enhancements v1: Response parsing improvements, prompt versioning, token tracking, provider abstraction infrastructure
+- Strategy Planner: Quality checks, diversity checking, template integration implemented
+- Run Persistence: Database storage and query endpoints for strategy run history
 - Bug fixes: Multi-symbol portfolio valuation, quality report persistence, retry logic improvements
 
-**Next Milestone**: Production hardening (monitoring, scaling, advanced features)
+**Next Milestone**: Production hardening (monitoring, scaling, advanced features, strategy selection/ranking)
 
