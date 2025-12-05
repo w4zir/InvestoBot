@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.core.logging import get_logger
 from app.core.scheduler import get_active_runs
-from app.trading.broker_alpaca import get_alpaca_broker
+from app.trading.broker_manager import get_broker
 from app.core.config import get_settings
 
 router = APIRouter()
@@ -111,59 +111,11 @@ async def cancel_all_orders() -> Dict:
         Summary of cancellation results
     """
     try:
-        broker = get_alpaca_broker()
+        broker = get_broker()
         
-        # Fetch all open orders from Alpaca
-        client = broker._client
-        resp = client.get("/v2/orders", params={"status": "open"})
-        resp.raise_for_status()
-        orders = resp.json()
-        
-        if not orders:
-            return {
-                "cancelled_count": 0,
-                "total_orders": 0,
-                "errors": [],
-                "message": "No open orders to cancel"
-            }
-        
-        cancelled_count = 0
-        errors = []
-        
-        for order in orders:
-            try:
-                cancel_resp = client.delete(f"/v2/orders/{order['id']}")
-                cancel_resp.raise_for_status()
-                cancelled_count += 1
-                logger.info(
-                    f"Cancelled order {order['id']}",
-                    extra={
-                        "order_id": order['id'],
-                        "symbol": order.get("symbol"),
-                        "side": order.get("side"),
-                        "quantity": order.get("qty")
-                    }
-                )
-            except Exception as e:
-                error_msg = f"Failed to cancel order {order['id']}: {str(e)}"
-                errors.append(error_msg)
-                logger.error(
-                    f"Failed to cancel order {order['id']}",
-                    exc_info=True,
-                    extra={"order_id": order['id'], "error": str(e)}
-                )
-        
-        logger.info(
-            f"Cancelled {cancelled_count} of {len(orders)} open orders",
-            extra={"cancelled": cancelled_count, "total": len(orders), "errors": len(errors)}
-        )
-        
-        return {
-            "cancelled_count": cancelled_count,
-            "total_orders": len(orders),
-            "errors": errors,
-            "message": f"Cancelled {cancelled_count} of {len(orders)} open orders"
-        }
+        # Use the broker's cancel_all_orders method instead of direct API calls
+        result = broker.cancel_all_orders()
+        return result
     except Exception as e:
         logger.error("Failed to cancel orders", exc_info=True, extra={"error": str(e)})
         raise HTTPException(status_code=500, detail=f"Failed to cancel orders: {str(e)}")
@@ -178,11 +130,8 @@ async def get_open_orders() -> Dict:
         List of open orders
     """
     try:
-        broker = get_alpaca_broker()
-        client = broker._client
-        resp = client.get("/v2/orders", params={"status": "open"})
-        resp.raise_for_status()
-        orders = resp.json()
+        broker = get_broker()
+        orders = broker.get_all_orders(status="open")
         
         return {
             "count": len(orders),

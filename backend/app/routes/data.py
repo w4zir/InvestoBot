@@ -13,6 +13,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.trading.data_manager import get_data_manager
 from app.trading.data_quality import DataQualityChecker
@@ -29,6 +30,7 @@ class RefreshDataRequest(BaseModel):
     symbols: List[str]
     start_date: str  # ISO format date
     end_date: str  # ISO format date
+    timeframe: str = "1d"  # Data timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)
     force: bool = False  # Force refresh even if cache is fresh
 
 
@@ -66,16 +68,17 @@ async def refresh_data(request: RefreshDataRequest):
             try:
                 # Check cache first
                 if not request.force:
-                    cached_data = data_manager.get_cached_data(symbol, start_date, end_date)
+                    cached_data = data_manager.get_cached_data(symbol, start_date, end_date, request.timeframe)
                     if cached_data:
                         cached.append(symbol)
                         continue
                 
                 # Load from source
-                source_data = load_data([symbol], start_date, end_date, use_cache=False)
+                source_data = load_data([symbol], start_date, end_date, use_cache=False, timeframe=request.timeframe)
                 if symbol in source_data and source_data[symbol]:
                     # Save to cache
-                    data_manager.save_data(symbol, source_data[symbol], start_date, end_date)
+                    data_source = get_settings().data.source.lower()
+                    data_manager.save_data(symbol, source_data[symbol], start_date, end_date, data_source=data_source, timeframe=request.timeframe)
                     refreshed.append(symbol)
                 else:
                     failed.append(symbol)
@@ -101,6 +104,7 @@ async def get_metadata(
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     start_date: Optional[str] = Query(None, description="Filter by start date (ISO format)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (ISO format)"),
+    timeframe: Optional[str] = Query(None, description="Filter by timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of results"),
 ):
     """
@@ -110,6 +114,7 @@ async def get_metadata(
         symbol: Optional symbol filter
         start_date: Optional start date filter
         end_date: Optional end date filter
+        timeframe: Optional timeframe filter
         limit: Maximum number of results
     
     Returns:
@@ -129,6 +134,8 @@ async def get_metadata(
             query = query.gte("start_date", start_date)
         if end_date:
             query = query.lte("end_date", end_date)
+        if timeframe:
+            query = query.eq("timeframe", timeframe)
         
         query = query.order("last_updated", desc=True).limit(limit)
         
@@ -147,6 +154,7 @@ async def get_quality_report(
     symbol: str,
     start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
     end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    timeframe: Optional[str] = Query("1d", description="Timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)"),
 ):
     """
     Get quality report for a specific symbol and date range.
@@ -155,6 +163,7 @@ async def get_quality_report(
         symbol: Symbol to check
         start_date: Optional start date
         end_date: Optional end date
+        timeframe: Data timeframe (default: "1d")
     
     Returns:
         Quality report
@@ -169,19 +178,20 @@ async def get_quality_report(
         if start_date and end_date:
             start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
             end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-            metadata = data_manager.get_data_metadata(symbol, start_dt, end_dt)
+            metadata = data_manager.get_data_metadata(symbol, start_dt, end_dt, timeframe)
         else:
-            # Get latest metadata for symbol
+            # Get latest metadata for symbol and timeframe
             response = (
                 data_manager.client.table("data_metadata")
                 .select("*")
                 .eq("symbol", symbol)
+                .eq("timeframe", timeframe)
                 .order("last_updated", desc=True)
                 .limit(1)
                 .execute()
             )
             if not response.data:
-                raise HTTPException(status_code=404, detail=f"No data found for {symbol}")
+                raise HTTPException(status_code=404, detail=f"No data found for {symbol} with timeframe {timeframe}")
             metadata = DataMetadataDB(**response.data[0])
         
         if not metadata or not metadata.quality_report_id:
@@ -208,9 +218,10 @@ async def get_quality_report(
 
 @router.post("/validate")
 async def validate_data(
-    symbol: str,
-    start_date: str,
-    end_date: str,
+    symbol: str = Query(..., description="Symbol to validate"),
+    start_date: str = Query(..., description="Start date (ISO format)"),
+    end_date: str = Query(..., description="End date (ISO format)"),
+    timeframe: str = Query("1d", description="Data timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)"),
 ):
     """
     Validate a specific dataset and return quality report.
@@ -219,6 +230,7 @@ async def validate_data(
         symbol: Symbol to validate
         start_date: Start date (ISO format)
         end_date: End date (ISO format)
+        timeframe: Data timeframe (default: "1d")
     
     Returns:
         Quality report
@@ -228,7 +240,7 @@ async def validate_data(
         end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
         
         # Load data
-        data = load_data([symbol], start_dt, end_dt, use_cache=True)
+        data = load_data([symbol], start_dt, end_dt, use_cache=True, timeframe=timeframe)
         
         if symbol not in data or not data[symbol]:
             raise HTTPException(status_code=404, detail=f"No data found for {symbol}")

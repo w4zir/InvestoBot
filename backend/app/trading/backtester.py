@@ -409,7 +409,8 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
 
         start_dt, end_dt = _parse_date_range(request.data_range)
         universe = strategy.universe or ["AAPL"]
-        ohlcv_data = market_data.load_data(universe=universe, start=start_dt, end=end_dt)
+        timeframe = getattr(request, "timeframe", "1d")  # Get timeframe from request, default to "1d"
+        ohlcv_data = market_data.load_data(universe=universe, start=start_dt, end=end_dt, timeframe=timeframe)
 
     if not ohlcv_data:
         logger.error("No OHLCV data available for backtest")

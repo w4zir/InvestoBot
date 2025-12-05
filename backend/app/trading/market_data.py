@@ -15,9 +15,18 @@ def _ensure_data_dir() -> Path:
     return path
 
 
-def _load_data_yahoo(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
+def _load_data_yahoo(universe: List[str], start: datetime, end: datetime, interval: str = "1d") -> Dict[str, List[Dict]]:
     """
     Load OHLCV data from Yahoo Finance using yfinance.
+    
+    Args:
+        universe: List of symbols to load
+        start: Start datetime
+        end: End datetime
+        interval: Data interval (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)
+    
+    Returns:
+        Dictionary mapping symbol to list of OHLCV bars
     """
     try:
         import yfinance as yf
@@ -29,9 +38,9 @@ def _load_data_yahoo(universe: List[str], start: datetime, end: datetime) -> Dic
     for symbol in universe:
         try:
             ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start.date(), end=end.date())
+            df = ticker.history(start=start, end=end, interval=interval)
             if df.empty:
-                logger.warning(f"No data found for {symbol} in date range")
+                logger.warning(f"No data found for {symbol} in date range with interval {interval}")
                 continue
 
             series: List[Dict] = []
@@ -48,7 +57,7 @@ def _load_data_yahoo(universe: List[str], start: datetime, end: datetime) -> Dic
                 }
                 series.append(candle)
             data[symbol] = series
-            logger.info(f"Loaded {len(series)} bars for {symbol} from Yahoo Finance")
+            logger.info(f"Loaded {len(series)} bars for {symbol} from Yahoo Finance (interval: {interval})")
         except Exception as e:
             logger.error(f"Failed to load data for {symbol} from Yahoo Finance: {e}", exc_info=True)
             # Continue with other symbols
@@ -56,22 +65,48 @@ def _load_data_yahoo(universe: List[str], start: datetime, end: datetime) -> Dic
     return data
 
 
-def _load_data_synthetic(universe: List[str], start: datetime, end: datetime) -> Dict[str, List[Dict]]:
+def _load_data_synthetic(universe: List[str], start: datetime, end: datetime, timeframe: str = "1d") -> Dict[str, List[Dict]]:
     """
     Generate synthetic OHLCV data for testing.
+    
+    Args:
+        universe: List of symbols to generate data for
+        start: Start datetime
+        end: End datetime
+        timeframe: Data timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo)
+    
+    Returns:
+        Dictionary mapping symbol to list of OHLCV bars
     """
     data: Dict[str, List[Dict]] = {}
-    days = (end - start).days or 1
-
+    
+    # Calculate time delta based on timeframe
+    timeframe_deltas = {
+        "1m": timedelta(minutes=1),
+        "5m": timedelta(minutes=5),
+        "15m": timedelta(minutes=15),
+        "30m": timedelta(minutes=30),
+        "60m": timedelta(hours=1),
+        "90m": timedelta(minutes=90),
+        "1h": timedelta(hours=1),
+        "1d": timedelta(days=1),
+        "1wk": timedelta(weeks=1),
+        "1mo": timedelta(days=30),
+        "3mo": timedelta(days=90),
+    }
+    
+    delta = timeframe_deltas.get(timeframe, timedelta(days=1))
+    
     for symbol in universe:
         series: List[Dict] = []
         price = 100.0
-        for i in range(days):
-            ts = start + timedelta(days=i)
+        current = start
+        
+        while current <= end:
             # Very naive random walk-ish synthetic prices
-            price *= 1.0 + (0.001 if i % 2 == 0 else -0.001)
+            price *= 1.0 + (0.001 if len(series) % 2 == 0 else -0.001)
             candle = {
-                "timestamp": ts,
+                "timestamp": current,
                 "open": price * 0.99,
                 "high": price * 1.01,
                 "low": price * 0.98,
@@ -79,12 +114,14 @@ def _load_data_synthetic(universe: List[str], start: datetime, end: datetime) ->
                 "volume": 1_000_000,
             }
             series.append(candle)
+            current += delta
+        
         data[symbol] = series
 
     return data
 
 
-def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bool = True) -> Dict[str, List[Dict]]:
+def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bool = True, timeframe: str = "1d") -> Dict[str, List[Dict]]:
     """
     Load OHLCV data from configured source (synthetic or Yahoo Finance).
     Uses data manager for caching if enabled.
@@ -94,6 +131,7 @@ def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bo
         start: Start datetime
         end: End datetime
         use_cache: Whether to use cache (default: True)
+        timeframe: Data timeframe (1m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 1wk, 1mo, 3mo). Default: "1d"
 
     Returns:
         Dictionary mapping symbol to list of OHLCV bars
@@ -103,7 +141,13 @@ def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bo
 
     logger.info(
         f"Loading market data from {source}",
-        extra={"universe": universe, "start": start.isoformat(), "end": end.isoformat(), "source": source},
+        extra={
+            "universe": universe,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "source": source,
+            "timeframe": timeframe,
+        },
     )
 
     # Try to use data manager for caching
@@ -116,15 +160,16 @@ def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bo
             # Define data loader function
             def _load_from_source(symbols: List[str], start_dt: datetime, end_dt: datetime) -> Dict[str, List[Dict]]:
                 if source == "yahoo":
-                    return _load_data_yahoo(symbols, start_dt, end_dt)
+                    return _load_data_yahoo(symbols, start_dt, end_dt, interval=timeframe)
                 else:
-                    return _load_data_synthetic(symbols, start_dt, end_dt)
+                    return _load_data_synthetic(symbols, start_dt, end_dt, timeframe=timeframe)
             
             # Use data manager to load (with caching)
             return data_manager.refresh_data(
                 symbols=universe,
                 start_date=start,
                 end_date=end,
+                timeframe=timeframe,
                 force=False,
                 data_loader_func=_load_from_source,
             )
@@ -134,9 +179,9 @@ def load_data(universe: List[str], start: datetime, end: datetime, use_cache: bo
     
     # Direct load (no caching or cache disabled)
     if source == "yahoo":
-        return _load_data_yahoo(universe, start, end)
+        return _load_data_yahoo(universe, start, end, interval=timeframe)
     else:
-        return _load_data_synthetic(universe, start, end)
+        return _load_data_synthetic(universe, start, end, timeframe=timeframe)
 
 
 

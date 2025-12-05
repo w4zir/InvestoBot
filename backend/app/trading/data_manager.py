@@ -44,6 +44,7 @@ class DataManager:
         symbol: str,
         start_date: datetime,
         end_date: datetime,
+        timeframe: str = "1d",
     ) -> Optional[List[Dict]]:
         """
         Load data from cache if available and fresh.
@@ -52,6 +53,7 @@ class DataManager:
             symbol: Symbol to load
             start_date: Start date
             end_date: End date
+            timeframe: Data timeframe (default: "1d")
         
         Returns:
             Cached data if available and fresh, None otherwise
@@ -60,7 +62,7 @@ class DataManager:
             return None
         
         try:
-            metadata = self.get_data_metadata(symbol, start_date, end_date)
+            metadata = self.get_data_metadata(symbol, start_date, end_date, timeframe)
             if not metadata:
                 return None
             
@@ -87,6 +89,7 @@ class DataManager:
         start_date: datetime,
         end_date: datetime,
         data_source: str = "yahoo",
+        timeframe: str = "1d",
     ) -> bool:
         """
         Save data to cache and update metadata.
@@ -97,6 +100,7 @@ class DataManager:
             start_date: Start date
             end_date: End date
             data_source: Data source name
+            timeframe: Data timeframe (default: "1d")
         
         Returns:
             True if successful, False otherwise
@@ -119,7 +123,7 @@ class DataManager:
                 )
             
             # Save to file
-            file_path = self._get_file_path(symbol, start_date, end_date)
+            file_path = self._get_file_path(symbol, start_date, end_date, timeframe)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             
             saved = self._save_to_file(file_path, data, self.file_format)
@@ -133,7 +137,7 @@ class DataManager:
             source_id = self._get_data_source_id(data_source)
             
             # Get existing metadata to check version
-            existing_metadata = self.get_data_metadata(symbol, start_date, end_date)
+            existing_metadata = self.get_data_metadata(symbol, start_date, end_date, timeframe)
             new_version = (existing_metadata.data_version + 1) if existing_metadata else 1
             
             # Update metadata
@@ -141,6 +145,7 @@ class DataManager:
                 "symbol": symbol,
                 "start_date": start_date.date().isoformat(),
                 "end_date": end_date.date().isoformat(),
+                "timeframe": timeframe,
                 "data_source_id": str(source_id) if source_id else None,
                 "file_path": str(file_path),
                 "file_format": self.file_format,
@@ -162,8 +167,16 @@ class DataManager:
             
             # Upsert metadata
             if self.client:
-                # Check if exists
-                existing = self.client.table("data_metadata").select("id").eq("symbol", symbol).eq("start_date", start_date.date().isoformat()).eq("end_date", end_date.date().isoformat()).execute()
+                # Check if exists (including timeframe in query)
+                existing = (
+                    self.client.table("data_metadata")
+                    .select("id")
+                    .eq("symbol", symbol)
+                    .eq("start_date", start_date.date().isoformat())
+                    .eq("end_date", end_date.date().isoformat())
+                    .eq("timeframe", timeframe)
+                    .execute()
+                )
                 
                 if existing.data:
                     # Update existing
@@ -181,6 +194,7 @@ class DataManager:
                     "rows": len(data),
                     "file_path": str(file_path),
                     "version": new_version,
+                    "timeframe": timeframe,
                 }
             )
             return True
@@ -193,6 +207,7 @@ class DataManager:
         symbols: List[str],
         start_date: datetime,
         end_date: datetime,
+        timeframe: str = "1d",
         force: bool = False,
         data_loader_func=None,
     ) -> Dict[str, List[Dict]]:
@@ -203,6 +218,7 @@ class DataManager:
             symbols: List of symbols to refresh
             start_date: Start date
             end_date: End date
+            timeframe: Data timeframe (default: "1d")
             force: Force refresh even if cache is fresh
             data_loader_func: Function to load data from source (takes symbols, start, end)
         
@@ -218,19 +234,20 @@ class DataManager:
         for symbol in symbols:
             # Check cache first
             if not force:
-                cached = self.get_cached_data(symbol, start_date, end_date)
+                cached = self.get_cached_data(symbol, start_date, end_date, timeframe)
                 if cached:
-                    logger.debug(f"Using cached data for {symbol}")
+                    logger.debug(f"Using cached data for {symbol} (timeframe: {timeframe})")
                     refreshed_data[symbol] = cached
                     continue
             
             # Fetch from source
-            logger.info(f"Refreshing data for {symbol} from source")
+            logger.info(f"Refreshing data for {symbol} from source (timeframe: {timeframe})")
             try:
                 source_data = data_loader_func([symbol], start_date, end_date)
                 if symbol in source_data and source_data[symbol]:
-                    # Save to cache
-                    self.save_data(symbol, source_data[symbol], start_date, end_date)
+                    # Save to cache (use data source from settings)
+                    data_source = settings.data.source.lower()
+                    self.save_data(symbol, source_data[symbol], start_date, end_date, data_source=data_source, timeframe=timeframe)
                     refreshed_data[symbol] = source_data[symbol]
             except Exception as e:
                 logger.error(f"Failed to refresh data for {symbol}: {e}", exc_info=True)
@@ -242,6 +259,7 @@ class DataManager:
         symbol: str,
         start_date: datetime,
         end_date: datetime,
+        timeframe: str = "1d",
     ) -> Optional[DataMetadataDB]:
         """
         Get metadata for a dataset.
@@ -250,6 +268,7 @@ class DataManager:
             symbol: Symbol
             start_date: Start date
             end_date: End date
+            timeframe: Data timeframe (default: "1d")
         
         Returns:
             DataMetadataDB if found, None otherwise
@@ -264,6 +283,7 @@ class DataManager:
                 .eq("symbol", symbol)
                 .eq("start_date", start_date.date().isoformat())
                 .eq("end_date", end_date.date().isoformat())
+                .eq("timeframe", timeframe)
                 .execute()
             )
             
@@ -274,10 +294,10 @@ class DataManager:
             logger.warning(f"Failed to get metadata for {symbol}: {e}", exc_info=True)
             return None
     
-    def _get_file_path(self, symbol: str, start_date: datetime, end_date: datetime) -> Path:
+    def _get_file_path(self, symbol: str, start_date: datetime, end_date: datetime, timeframe: str = "1d") -> Path:
         """Get file path for cached data."""
         symbol_dir = self.ohlcv_dir / symbol.upper()
-        filename = f"{start_date.date().isoformat()}_{end_date.date().isoformat()}.{self.file_format}"
+        filename = f"{start_date.date().isoformat()}_{end_date.date().isoformat()}_{timeframe}.{self.file_format}"
         return symbol_dir / filename
     
     def _save_to_file(self, file_path: Path, data: List[Dict], file_format: str) -> bool:
@@ -401,7 +421,7 @@ def scheduled_refresh():
     """
     Scheduled data refresh function.
     Can be called by cron job or scheduler.
-    Refreshes data for default universe with default lookback period.
+    Refreshes data for default universe with default lookback period and default timeframe.
     """
     from datetime import datetime, timedelta
     
@@ -409,22 +429,24 @@ def scheduled_refresh():
     settings = get_settings()
     data_manager = get_data_manager()
     
-    # Get default universe and lookback
+    # Get default universe, lookback, and timeframe
     symbols = settings.data.default_universe
     end_date = datetime.utcnow()
     start_date = end_date - timedelta(days=settings.data.default_lookback_days)
+    timeframe = settings.data.default_timeframe
     
     # Define data loader
     from app.trading.market_data import load_data
     
     def _load_from_source(symbols_list: List[str], start_dt: datetime, end_dt: datetime) -> Dict[str, List[Dict]]:
-        return load_data(symbols_list, start_dt, end_dt, use_cache=False)
+        return load_data(symbols_list, start_dt, end_dt, use_cache=False, timeframe=timeframe)
     
     # Refresh data
     refreshed = data_manager.refresh_data(
         symbols=symbols,
         start_date=start_date,
         end_date=end_date,
+        timeframe=timeframe,
         force=False,  # Use cache if fresh
         data_loader_func=_load_from_source,
     )
@@ -436,6 +458,7 @@ def scheduled_refresh():
             "refreshed_count": len(refreshed),
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
+            "timeframe": timeframe,
         }
     )
     

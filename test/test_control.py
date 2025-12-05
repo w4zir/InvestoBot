@@ -61,33 +61,20 @@ class TestControl(unittest.TestCase):
         self.assertIsNone(status["reason"])
         self.assertIsNone(status["activated_at"])
 
-    @patch('app.routes.control.get_alpaca_broker')
+    @patch('app.routes.control.get_broker')
     def test_cancel_all_orders_success(self, mock_get_broker):
         """Test successful cancellation of all orders."""
         # Mock broker
         mock_broker = MagicMock()
         mock_get_broker.return_value = mock_broker
         
-        # Mock open orders
-        mock_orders = [
-            {"id": "order1", "symbol": "AAPL", "side": "buy", "qty": 10},
-            {"id": "order2", "symbol": "MSFT", "side": "sell", "qty": 5},
-        ]
-        
-        # Mock client responses
-        mock_client = MagicMock()
-        mock_broker._client = mock_client
-        
-        # Mock GET /v2/orders
-        mock_get_response = MagicMock()
-        mock_get_response.json.return_value = mock_orders
-        mock_get_response.raise_for_status = MagicMock()
-        mock_client.get.return_value = mock_get_response
-        
-        # Mock DELETE responses
-        mock_delete_response = MagicMock()
-        mock_delete_response.raise_for_status = MagicMock()
-        mock_client.delete.return_value = mock_delete_response
+        # Mock cancel_all_orders method
+        mock_broker.cancel_all_orders.return_value = {
+            "cancelled_count": 2,
+            "total_orders": 2,
+            "errors": [],
+            "message": "Cancelled 2 of 2 open orders"
+        }
         
         result = cancel_all_orders()
         
@@ -95,54 +82,38 @@ class TestControl(unittest.TestCase):
         self.assertEqual(result["total_orders"], 2)
         self.assertEqual(len(result["errors"]), 0)
 
-    @patch('app.routes.control.get_alpaca_broker')
+    @patch('app.routes.control.get_broker')
     def test_cancel_all_orders_no_orders(self, mock_get_broker):
         """Test cancellation when there are no open orders."""
         mock_broker = MagicMock()
         mock_get_broker.return_value = mock_broker
         
-        mock_client = MagicMock()
-        mock_broker._client = mock_client
-        
-        mock_get_response = MagicMock()
-        mock_get_response.json.return_value = []  # No orders
-        mock_get_response.raise_for_status = MagicMock()
-        mock_client.get.return_value = mock_get_response
+        # Mock cancel_all_orders method for no orders
+        mock_broker.cancel_all_orders.return_value = {
+            "cancelled_count": 0,
+            "total_orders": 0,
+            "errors": [],
+            "message": "No open orders to cancel"
+        }
         
         result = cancel_all_orders()
         
         self.assertEqual(result["cancelled_count"], 0)
         self.assertEqual(result["total_orders"], 0)
 
-    @patch('app.routes.control.get_alpaca_broker')
+    @patch('app.routes.control.get_broker')
     def test_cancel_all_orders_partial_failure(self, mock_get_broker):
         """Test cancellation when some orders fail to cancel."""
         mock_broker = MagicMock()
         mock_get_broker.return_value = mock_broker
         
-        mock_orders = [
-            {"id": "order1", "symbol": "AAPL", "side": "buy", "qty": 10},
-            {"id": "order2", "symbol": "MSFT", "side": "sell", "qty": 5},
-        ]
-        
-        mock_client = MagicMock()
-        mock_broker._client = mock_client
-        
-        mock_get_response = MagicMock()
-        mock_get_response.json.return_value = mock_orders
-        mock_get_response.raise_for_status = MagicMock()
-        mock_client.get.return_value = mock_get_response
-        
-        # First delete succeeds, second fails
-        def delete_side_effect(url):
-            mock_resp = MagicMock()
-            if "order1" in url:
-                mock_resp.raise_for_status = MagicMock()
-            else:
-                mock_resp.raise_for_status.side_effect = Exception("Failed to cancel")
-            return mock_resp
-        
-        mock_client.delete.side_effect = delete_side_effect
+        # Mock cancel_all_orders method with partial failure
+        mock_broker.cancel_all_orders.return_value = {
+            "cancelled_count": 1,
+            "total_orders": 2,
+            "errors": ["Failed to cancel order order2: Error message"],
+            "message": "Cancelled 1 of 2 open orders"
+        }
         
         result = cancel_all_orders()
         
@@ -150,7 +121,7 @@ class TestControl(unittest.TestCase):
         self.assertGreater(result["cancelled_count"], 0)
         self.assertGreater(len(result["errors"]), 0)
 
-    @patch('app.routes.control.get_alpaca_broker')
+    @patch('app.routes.control.get_broker')
     def test_get_open_orders(self, mock_get_broker):
         """Test getting open orders."""
         mock_broker = MagicMock()
@@ -160,13 +131,8 @@ class TestControl(unittest.TestCase):
             {"id": "order1", "symbol": "AAPL", "side": "buy", "qty": 10},
         ]
         
-        mock_client = MagicMock()
-        mock_broker._client = mock_client
-        
-        mock_response = MagicMock()
-        mock_response.json.return_value = mock_orders
-        mock_response.raise_for_status = MagicMock()
-        mock_client.get.return_value = mock_response
+        # Mock get_all_orders method
+        mock_broker.get_all_orders.return_value = mock_orders
         
         result = get_open_orders()
         

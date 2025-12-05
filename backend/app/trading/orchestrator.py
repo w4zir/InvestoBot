@@ -9,7 +9,7 @@ from app.core.repository import RunRepository
 from app.routes.control import is_kill_switch_enabled
 from app.trading import market_data
 from app.trading.backtester import run_backtest
-from app.trading.broker_alpaca import get_alpaca_broker
+from app.trading.broker_manager import get_broker
 from app.trading.models import (
     BacktestRequest,
     CandidateResult,
@@ -162,6 +162,7 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
 
     universe = context.get("universe") or settings.data.default_universe
     data_range = context.get("data_range") or _default_date_range()
+    timeframe = context.get("timeframe") or settings.data.default_timeframe
 
     # Add log context for the run
     run_id = f"run_{int(datetime.utcnow().timestamp())}"
@@ -169,19 +170,19 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
     
     logger.info(
         "Starting strategy run",
-        extra={"mission": mission, "universe": universe, "data_range": data_range, "run_id": run_id},
+        extra={"mission": mission, "universe": universe, "data_range": data_range, "timeframe": timeframe, "run_id": run_id},
     )
 
     strategies: List[StrategySpec] = generate_strategy_specs(mission=mission, context=context)
 
     start_dt, end_dt = _parse_date_range(data_range)
-    ohlcv = market_data.load_data(universe=universe, start=start_dt, end=end_dt)
+    ohlcv = market_data.load_data(universe=universe, start=start_dt, end=end_dt, timeframe=timeframe)
 
     # Determine portfolio state: fetch from Alpaca if executing, otherwise use synthetic
     should_execute = context.get("execute", False)
     if should_execute:
         try:
-            broker = get_alpaca_broker()
+            broker = get_broker()
             portfolio = broker.get_positions()
             logger.info("Fetched portfolio from Alpaca", extra={"cash": portfolio.cash, "positions_count": len(portfolio.positions)})
         except Exception as e:
@@ -327,7 +328,7 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                 execution_error = "Execution blocked: dev environment without ALLOW_EXECUTE flag"
             else:
                 try:
-                    broker = get_alpaca_broker()
+                    broker = get_broker()
                     fills = broker.execute_orders(assessment.approved_trades)
                     logger.info(
                         f"Executed {len(fills)} orders for strategy {spec.strategy_id}",

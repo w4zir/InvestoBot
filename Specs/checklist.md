@@ -112,19 +112,19 @@ These tasks are essential for a working MVP and should be prioritized.
 
 ### Broker Integration
 
-- [ ] **Alpaca broker enhancements**
-  - [ ] Add order status checking
-  - [ ] Implement order cancellation
-  - [ ] Add position monitoring
-  - [ ] Implement fill verification
-  - [ ] Add error handling and retries
-  - [ ] Support limit orders with price adjustments
+- [x] **Alpaca broker enhancements**
+  - [x] Add order status checking
+  - [x] Implement order cancellation
+  - [x] Add position monitoring
+  - [x] Implement fill verification
+  - [x] Add error handling and retries
+  - [x] Support limit orders with price adjustments
 
-- [ ] **Broker abstraction**
-  - [ ] Create broker interface/abstract class
-  - [ ] Support multiple brokers (Alpaca, Interactive Brokers, etc.)
-  - [ ] Add broker health checks
-  - [ ] Implement broker failover (optional)
+- [x] **Broker abstraction**
+  - [x] Create broker interface/abstract class
+  - [x] Support multiple brokers (Alpaca, Interactive Brokers, etc.)
+  - [x] Add broker health checks
+  - [x] Implement broker failover (optional)
 
 ---
 
