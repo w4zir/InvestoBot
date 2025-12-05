@@ -42,7 +42,7 @@ class GoogleAgentClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((RuntimeError, Exception)),
+        retry=retry_if_exception_type(RuntimeError),
         reraise=True,
     )
     def plan_strategy(self, mission: str, context: Dict[str, Any]) -> Dict[str, Any]:

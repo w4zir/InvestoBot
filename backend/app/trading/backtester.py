@@ -686,7 +686,9 @@ def run_backtest(request: BacktestRequest, ohlcv_data: Optional[Dict[str, List[D
             current_prices: Dict[str, float] = {}
             for sym in universe:
                 sym_bars = ohlcv_data[sym]
-                sym_idx = next((idx for ts, s, idx in timeline if s == sym and ts <= timestamp), len(sym_bars) - 1)
+                # Find the most recent bar index (max) rather than first match (next)
+                matching_indices = [idx for ts, s, idx in timeline if s == sym and ts <= timestamp]
+                sym_idx = max(matching_indices) if matching_indices else (len(sym_bars) - 1)
                 if sym_idx < len(sym_bars):
                     current_prices[sym] = sym_bars[sym_idx]["close"]
                     pos_info = positions.get(sym, {})

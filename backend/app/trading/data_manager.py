@@ -158,14 +158,8 @@ class DataManager:
                 "updated_at": datetime.utcnow().isoformat(),
             }
             
-            # Save quality report if available
-            quality_report_id = None
-            if quality_report and self.client:
-                quality_report_id = self._save_quality_report(metadata_data.get("id"), quality_report)
-                if quality_report_id:
-                    metadata_data["quality_report_id"] = str(quality_report_id)
-            
-            # Upsert metadata
+            # Upsert metadata first to obtain the metadata_id
+            metadata_id = None
             if self.client:
                 # Check if exists (including timeframe in query)
                 existing = (
@@ -185,7 +179,19 @@ class DataManager:
                 else:
                     # Insert new
                     metadata_data["created_at"] = datetime.utcnow().isoformat()
-                    self.client.table("data_metadata").insert(metadata_data).execute()
+                    response = self.client.table("data_metadata").insert(metadata_data).execute()
+                    if response.data:
+                        metadata_id = response.data[0]["id"]
+            
+            # Save quality report if available (now that we have metadata_id)
+            quality_report_id = None
+            if quality_report and self.client and metadata_id:
+                quality_report_id = self._save_quality_report(metadata_id, quality_report)
+                if quality_report_id:
+                    # Update metadata with quality_report_id
+                    self.client.table("data_metadata").update(
+                        {"quality_report_id": str(quality_report_id)}
+                    ).eq("id", metadata_id).execute()
             
             logger.info(
                 f"Saved data for {symbol} to cache",
