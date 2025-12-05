@@ -28,14 +28,41 @@ export default function ControlPanel() {
   const fetchAllStatus = async () => {
     try {
       setError(null)
-      const [killSwitch, orders, scheduler] = await Promise.all([
+      // Use Promise.allSettled to handle partial failures gracefully
+      const results = await Promise.allSettled([
         getKillSwitchStatus(),
         getOpenOrders(),
         getSchedulerStatus(),
       ])
-      setKillSwitchStatus(killSwitch)
-      setOpenOrders(orders)
-      setSchedulerStatus(scheduler)
+      
+      // Handle kill switch status
+      if (results[0].status === 'fulfilled') {
+        setKillSwitchStatus(results[0].value)
+      } else {
+        console.error('Failed to fetch kill switch status:', results[0].reason)
+      }
+      
+      // Handle open orders (may fail if broker unavailable, but that's OK)
+      if (results[1].status === 'fulfilled') {
+        setOpenOrders(results[1].value)
+      } else {
+        console.error('Failed to fetch open orders:', results[1].reason)
+        // Set empty orders if fetch fails
+        setOpenOrders({ count: 0, orders: [], broker_available: false, message: 'Failed to fetch orders' })
+      }
+      
+      // Handle scheduler status
+      if (results[2].status === 'fulfilled') {
+        setSchedulerStatus(results[2].value)
+      } else {
+        console.error('Failed to fetch scheduler status:', results[2].reason)
+      }
+      
+      // Only show error if all requests failed
+      const failedCount = results.filter(r => r.status === 'rejected').length
+      if (failedCount === results.length) {
+        setError('Failed to fetch control status. Please check backend connection.')
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch control status'
       setError(errorMessage)
@@ -94,8 +121,13 @@ export default function ControlPanel() {
     try {
       const result = await cancelAllOrders()
       await fetchAllStatus()
-      if (result.errors.length > 0) {
-        setError(`Some orders failed to cancel: ${result.errors.join(', ')}`)
+      if (result.success === false || result.errors.length > 0) {
+        // Show message from backend if broker is unavailable
+        if (result.message && result.message.includes('Broker unavailable')) {
+          setError(result.message)
+        } else if (result.errors.length > 0) {
+          setError(`Some orders failed to cancel: ${result.errors.join(', ')}`)
+        }
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to cancel orders'
@@ -239,7 +271,14 @@ export default function ControlPanel() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {openOrders && openOrders.count > 0 ? (
+          {openOrders && openOrders.broker_available === false ? (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                {openOrders.message || 'Broker is not configured or unavailable. Please configure Alpaca API keys in backend/.env to view open orders.'}
+              </AlertDescription>
+            </Alert>
+          ) : openOrders && openOrders.count > 0 ? (
             <>
               <div className="space-y-2">
                 {openOrders.orders.map((order, idx) => (

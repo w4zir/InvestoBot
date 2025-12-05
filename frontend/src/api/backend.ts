@@ -155,8 +155,9 @@ export interface KillSwitchStatus {
 }
 
 export interface CancelOrdersResponse {
+  success?: boolean;
   cancelled_count: number;
-  total_orders: number;
+  total_orders?: number;
   errors: string[];
   message: string;
 }
@@ -164,6 +165,8 @@ export interface CancelOrdersResponse {
 export interface OpenOrdersResponse {
   count: number;
   orders: any[];
+  broker_available?: boolean;
+  message?: string;
 }
 
 export interface SchedulerStatus {

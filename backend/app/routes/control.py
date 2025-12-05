@@ -116,6 +116,15 @@ async def cancel_all_orders() -> Dict:
         # Use the broker's cancel_all_orders method instead of direct API calls
         result = broker.cancel_all_orders()
         return result
+    except RuntimeError as e:
+        # Broker is unavailable (e.g., Alpaca not configured)
+        logger.warning("Cannot cancel orders: broker unavailable", extra={"error": str(e)})
+        return {
+            "success": False,
+            "cancelled_count": 0,
+            "errors": [f"Broker unavailable: {str(e)}"],
+            "message": "Cannot cancel orders because broker is not configured or unavailable. Please configure Alpaca API keys in backend/.env"
+        }
     except Exception as e:
         logger.error("Failed to cancel orders", exc_info=True, extra={"error": str(e)})
         raise HTTPException(status_code=500, detail=f"Failed to cancel orders: {str(e)}")
@@ -127,7 +136,7 @@ async def get_open_orders() -> Dict:
     Get all open orders from Alpaca.
     
     Returns:
-        List of open orders
+        List of open orders, or empty list if broker is unavailable
     """
     try:
         broker = get_broker()
@@ -136,6 +145,15 @@ async def get_open_orders() -> Dict:
         return {
             "count": len(orders),
             "orders": orders
+        }
+    except RuntimeError as e:
+        # Broker is unavailable (e.g., Alpaca not configured)
+        logger.warning("Cannot fetch open orders: broker unavailable", extra={"error": str(e)})
+        return {
+            "count": 0,
+            "orders": [],
+            "broker_available": False,
+            "message": "Broker is not configured or unavailable. Please configure Alpaca API keys in backend/.env to view open orders."
         }
     except Exception as e:
         logger.error("Failed to fetch open orders", exc_info=True, extra={"error": str(e)})
