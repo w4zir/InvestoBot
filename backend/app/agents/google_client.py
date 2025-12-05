@@ -1,12 +1,19 @@
 import json
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional
 
 from google import genai  # type: ignore[import]
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    RetryError,
+)
 
 from app.agents.strategy_templates import get_template_registry
 from app.core.config import get_settings
 from app.core.logging import get_logger
-
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -29,15 +36,26 @@ class GoogleAgentClient:
 
         self._client = genai.Client(api_key=settings.google.api_key)
         self._model_name = settings.google.model
+        self._last_token_usage: Optional[Any] = None
+        self._prompt_version = settings.google.prompt_version
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((RuntimeError, Exception)),
+        reraise=True,
+    )
     def plan_strategy(self, mission: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Call the Google model/agent to propose a trading strategy.
 
-        This returns the raw JSON-like response; higher-level parsing is
-        handled by the strategy planner module.
+        This returns the raw JSON-like response with JSON validation at client level.
+        Higher-level parsing is handled by the strategy planner module.
         """
-        logger.info("Calling Google Agent for strategy planning", extra={"mission": mission})
+        logger.info(
+            "Calling Google Agent for strategy planning",
+            extra={"mission": mission, "prompt_version": self._prompt_version}
+        )
 
         # Get template examples for few-shot learning
         template_registry = get_template_registry()
@@ -52,7 +70,7 @@ class GoogleAgentClient:
         # Build few-shot examples section
         examples_section = self._build_examples_section(template_examples)
         
-        # Build the complete prompt
+        # Build the complete prompt with versioning
         prompt = self._build_enhanced_prompt(risk_constraints, template_section, examples_section)
 
         try:
@@ -77,6 +95,10 @@ class GoogleAgentClient:
             )
         except Exception as exc:
             error_msg = str(exc)
+            # Check for rate limiting (429) or quota errors
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.warning("Google API rate limited, will retry", exc_info=True)
+                raise RuntimeError(f"Rate limited: {error_msg}") from exc
             # Check for API key related errors
             if "API key" in error_msg or "API_KEY" in error_msg or "INVALID_ARGUMENT" in error_msg:
                 logger.error("Google API key error", exc_info=True)
@@ -90,8 +112,7 @@ class GoogleAgentClient:
             logger.error("Google API call failed", exc_info=True)
             raise RuntimeError(f"Failed to call Google Agent API: {error_msg}") from exc
 
-        # The exact structure depends on the google-genai SDK; here we assume
-        # a .text property on the first candidate, which you'll adapt as needed.
+        # Extract response text
         try:
             candidate = response.candidates[0]
             text = candidate.content.parts[0].text  # type: ignore[attr-defined]
@@ -99,8 +120,112 @@ class GoogleAgentClient:
             logger.error("Failed to read response from Google Agent", exc_info=True)
             raise RuntimeError("Invalid response from Google Agent") from exc
 
-        # Delegate JSON parsing to the strategy planner, which knows the schema.
-        return {"raw_text": text}
+        # Extract token usage if available
+        try:
+            usage_metadata = response.usage_metadata  # type: ignore[attr-defined]
+            if usage_metadata:
+                self._last_token_usage = {
+                    "input_tokens": getattr(usage_metadata, "prompt_token_count", 0),
+                    "output_tokens": getattr(usage_metadata, "candidates_token_count", 0),
+                }
+        except Exception:
+            # Token usage not available, that's okay
+            self._last_token_usage = None
+
+        # Validate JSON at client level
+        json_text = self._extract_and_validate_json(text)
+        
+        result = {"raw_text": text, "validated_json": json_text}
+        if self._last_token_usage:
+            result["token_usage"] = self._last_token_usage
+        
+        return result
+    
+    def _extract_and_validate_json(self, text: str) -> str:
+        """
+        Extract JSON from text and validate it at client level.
+        
+        Returns:
+            Validated JSON string
+            
+        Raises:
+            ValueError: If JSON cannot be extracted or is invalid
+        """
+        if not text:
+            raise ValueError("Empty response from Google Agent")
+        
+        # Try to find JSON in markdown code blocks first
+        json_block_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
+        match = re.search(json_block_pattern, text, re.DOTALL)
+        if match:
+            json_text = match.group(1)
+        else:
+            # Try to find JSON object by matching braces
+            start_idx = text.find('{')
+            if start_idx == -1:
+                raise ValueError("No JSON object found in response")
+            
+            brace_count = 0
+            for i in range(start_idx, len(text)):
+                if text[i] == '{':
+                    brace_count += 1
+                elif text[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_text = text[start_idx:i+1]
+                        break
+            else:
+                raise ValueError("Incomplete JSON object in response")
+        
+        # Validate JSON syntax
+        try:
+            json.loads(json_text)
+        except json.JSONDecodeError as e:
+            logger.error("Invalid JSON from Google Agent", extra={"json_text": json_text[:500], "error": str(e)})
+            raise ValueError(f"Invalid JSON in response: {str(e)}") from e
+        
+        # Validate structure - must have "strategies" key
+        parsed = json.loads(json_text)
+        if not isinstance(parsed, dict):
+            raise ValueError("Response is not a JSON object")
+        if "strategies" not in parsed:
+            raise ValueError("Response missing 'strategies' key")
+        if not isinstance(parsed["strategies"], list):
+            raise ValueError("'strategies' must be a list")
+        
+        logger.debug("JSON validated successfully at client level", extra={"strategies_count": len(parsed["strategies"])})
+        return json_text
+    
+    def get_token_usage(self) -> Optional[Dict[str, int]]:
+        """Get token usage from the last API call."""
+        return self._last_token_usage
+    
+    def health_check(self) -> bool:
+        """Check if the provider connection is healthy."""
+        try:
+            # Simple health check - try to access the client
+            return self._client is not None and self._model_name is not None
+        except Exception:
+            return False
+    
+    def get_health_status(self) -> Dict[str, Any]:
+        """Get detailed health status of the provider."""
+        return {
+            "healthy": self.health_check(),
+            "provider": "google",
+            "model": self._model_name,
+            "prompt_version": self._prompt_version,
+        }
+    
+    @property
+    def provider_name(self) -> str:
+        """Get the name of this provider."""
+        return "google"
+    
+    @property
+    def model_name(self) -> str:
+        """Get the model name being used."""
+        return self._model_name
     
     def _build_risk_constraints_section(self) -> str:
         """Build the risk constraints section of the prompt."""
@@ -163,7 +288,10 @@ class GoogleAgentClient:
         return section
     
     def _build_enhanced_prompt(self, risk_constraints: str, template_section: str, examples_section: str) -> str:
-        """Build the complete enhanced prompt."""
+        """Build the complete enhanced prompt with versioning."""
+        # Add prompt version metadata (for A/B testing)
+        version_comment = f"\n<!-- Prompt Version: {self._prompt_version} -->\n"
+        
         base_prompt = """You are an investment strategy planner. You MUST output ONLY a valid JSON object (no markdown, no code blocks, no explanations).
 
 The JSON must contain an array 'strategies', where each strategy has:
@@ -192,7 +320,7 @@ OUTPUT FORMAT:
 }
 """
         
-        return base_prompt + risk_constraints + template_section + examples_section
+        return version_comment + base_prompt + risk_constraints + template_section + examples_section
 
 
 _client_instance: GoogleAgentClient | None = None
