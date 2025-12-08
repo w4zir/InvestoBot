@@ -628,6 +628,103 @@ class APITester:
             self.print_error(f"Data quality test failed: {e}")
             return False
     
+    def test_strategy_templates(self) -> bool:
+        """Test: List available strategy templates"""
+        self.print_header("Test: Strategy Templates")
+        try:
+            response = self.session.get(f"{self.base_url}/strategies/templates")
+            response.raise_for_status()
+            data = response.json()
+            
+            if isinstance(data, list) and len(data) > 0:
+                self.print_success(f"Found {len(data)} templates")
+                for template in data[:3]:  # Show first 3
+                    self.print_info(f"  - {template.get('name', 'Unknown')} ({template.get('template_id', 'N/A')})")
+                return True
+            else:
+                self.print_error("No templates returned or invalid format")
+                return False
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Templates endpoint failed: {e}")
+            return False
+
+    def test_strategy_run_with_template(self) -> bool:
+        """Test: Strategy run with predefined template"""
+        self.print_header("Test: Strategy Run with Template")
+        
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
+        data_range = f"{start_date}:{end_date}"
+        
+        payload = {
+            "mission": "Using predefined strategies",
+            "template_ids": ["volatility_breakout"],
+            "context": {
+                "universe": ["AAPL", "MSFT"],
+                "data_range": data_range,
+                "execute": False
+            }
+        }
+        
+        try:
+            self.print_info(f"Request payload: {json.dumps(payload, indent=2)}")
+            response = self.session.post(
+                f"{self.base_url}/strategies/run",
+                json=payload,
+                timeout=120
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if "candidates" in data and len(data["candidates"]) > 0:
+                self.print_success(f"Template strategy run successful: {len(data['candidates'])} candidates")
+                return True
+            else:
+                self.print_error("No candidates in response")
+                return False
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Template strategy run failed: {e}")
+            return False
+
+    def test_strategy_run_multi_source(self) -> bool:
+        """Test: Strategy run with multi-source decision enabled"""
+        self.print_header("Test: Strategy Run with Multi-Source Decision")
+        
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=365)
+        data_range = f"{start_date}:{end_date}"
+        
+        payload = {
+            "mission": "Find momentum strategies",
+            "template_ids": ["volatility_breakout"],
+            "enable_multi_source_decision": True,
+            "context": {
+                "universe": ["AAPL", "MSFT"],
+                "data_range": data_range,
+                "execute": False
+            }
+        }
+        
+        try:
+            self.print_info(f"Request payload: {json.dumps(payload, indent=2)}")
+            response = self.session.post(
+                f"{self.base_url}/strategies/run",
+                json=payload,
+                timeout=120
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if "candidates" in data and len(data["candidates"]) > 0:
+                self.print_success(f"Multi-source decision run successful: {len(data['candidates'])} candidates")
+                return True
+            else:
+                self.print_error("No candidates in response")
+                return False
+        except requests.exceptions.RequestException as e:
+            self.print_error(f"Multi-source decision run failed: {e}")
+            return False
+
     def test_best_strategies(self) -> bool:
         """Test 11: Best strategies endpoint"""
         self.print_header("Test 11: Best Strategies")
@@ -662,7 +759,10 @@ class APITester:
         tests = [
             ("Health Check", self.test_health),
             ("Root Status", self.test_status),
+            ("Strategy Templates", self.test_strategy_templates),
             ("Strategy Run (Backtest)", self.test_strategy_run_backtest_only),
+            ("Strategy Run (Template)", self.test_strategy_run_with_template),
+            ("Strategy Run (Multi-Source)", self.test_strategy_run_multi_source),
             ("Account Status", self.test_account_status),
             ("Edge Case - Missing Data", self.test_edge_case_missing_data),
             ("Walk-Forward Validation", self.test_strategy_run_with_walk_forward),
@@ -723,7 +823,7 @@ Examples:
     
     parser.add_argument(
         "--test",
-        choices=["health", "status", "strategy", "account", "edge", "walkforward", "scenarios", "killswitch", "history", "best", "data", "all"],
+        choices=["health", "status", "templates", "template", "multi-source", "strategy", "account", "edge", "walkforward", "scenarios", "killswitch", "history", "best", "data", "all"],
         default="all",
         help="Which test to run (default: all)"
     )
@@ -746,6 +846,15 @@ Examples:
         sys.exit(0 if success else 1)
     elif args.test == "status":
         success = tester.test_status()
+        sys.exit(0 if success else 1)
+    elif args.test == "templates":
+        success = tester.test_strategy_templates()
+        sys.exit(0 if success else 1)
+    elif args.test == "template":
+        success = tester.test_strategy_run_with_template()
+        sys.exit(0 if success else 1)
+    elif args.test == "multi-source":
+        success = tester.test_strategy_run_multi_source()
         sys.exit(0 if success else 1)
     elif args.test == "strategy":
         success = tester.test_strategy_run_backtest_only()

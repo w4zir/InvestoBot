@@ -55,10 +55,13 @@ python test_api.py --base-url http://localhost:8001
 
 1. **Health Check** - Tests `/health/` endpoint
 2. **Root Status** - Tests `/status` endpoint
-3. **Strategy Run (Backtest)** - Tests strategy generation and backtesting without execution
-4. **Account Status** - Tests `/trading/account` endpoint
-5. **Edge Case - Missing Data** - Tests error handling for invalid symbols
-6. **Strategy Run (Execution)** - Tests full pipeline with execution (requires confirmation)
+3. **Strategy Templates** - Tests `GET /strategies/templates` endpoint
+4. **Strategy Run (Backtest)** - Tests strategy generation and backtesting without execution
+5. **Strategy Run (Templates)** - Tests predefined strategy templates
+6. **Strategy Run (Multi-Source Decision)** - Tests multi-source decision framework
+7. **Account Status** - Tests `/trading/account` endpoint
+8. **Edge Case - Missing Data** - Tests error handling for invalid symbols
+9. **Strategy Run (Execution)** - Tests full pipeline with execution (requires confirmation)
 
 ## Test Output
 

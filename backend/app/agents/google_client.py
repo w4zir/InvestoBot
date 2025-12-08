@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from google import genai  # type: ignore[import]
 from tenacity import (

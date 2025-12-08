@@ -450,10 +450,55 @@ npm test
 After setup is complete:
 
 1. **Explore the Dashboard**: Open frontend and navigate through tabs
-2. **Run a Strategy**: Use the "Run Strategy" tab to test the system
-3. **View History**: Check "Strategy History" to see past runs
-4. **Monitor Logs**: Check `backend/logs/` for application logs
-5. **Review Documentation**: Read `docs/how it works.md` for system architecture
+2. **List Available Templates**: Use `GET /strategies/templates` to see predefined strategies
+3. **Run a Strategy**: 
+   - Use predefined templates: Set `template_ids` in the request
+   - Use custom mission: Provide a `mission` string
+   - Use both: Combine templates and custom mission
+   - Enable multi-source decision: Set `enable_multi_source_decision=true`
+4. **View History**: Check "Strategy History" to see past runs
+5. **Monitor Logs**: Check `backend/logs/` for application logs
+6. **Review Documentation**: Read `docs/how it works.md` for system architecture
+
+## Example: Using Predefined Strategies
+
+**List templates:**
+```bash
+curl http://localhost:8000/strategies/templates | jq .
+```
+
+**Run with a template:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Using predefined strategies",
+        "template_ids": ["volatility_breakout"],
+        "context": {
+          "universe": ["AAPL", "MSFT"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Run with multi-source decision:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Find momentum strategies",
+        "template_ids": ["volatility_breakout"],
+        "enable_multi_source_decision": true,
+        "context": {
+          "universe": ["AAPL", "MSFT"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Note**: Multi-source decision framework currently uses mock data providers. Real providers (NewsAPI, Twitter API, etc.) can be configured by implementing the provider interfaces in `backend/app/trading/external_data.py` and updating `backend/app/core/config.py` with provider settings.
 
 ---
 

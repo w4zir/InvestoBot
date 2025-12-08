@@ -402,3 +402,181 @@ def create_mock_llm_response_with_text(
     
     return f"{prefix_text}\n\n{json_str}\n\n{suffix_text}"
 
+
+def create_mock_template(
+    template_id: str = "test_template",
+    name: str = "Test Template",
+    description: str = "A test template",
+    template_type: str = "test",
+) -> Dict[str, Any]:
+    """
+    Create a mock strategy template for testing.
+    
+    Args:
+        template_id: Unique template identifier
+        name: Template name
+        description: Template description
+        template_type: Template type
+    
+    Returns:
+        Dictionary representing a StrategyTemplate
+    """
+    return {
+        "template_id": template_id,
+        "name": name,
+        "description": description,
+        "type": template_type,
+        "required_params": {"param1": "value1"},
+        "optional_params": {"param2": "value2"},
+        "example_rules": [
+            {
+                "type": "entry",
+                "indicator": "sma",
+                "params": {"window": 10, "threshold": 0}
+            }
+        ],
+        "example_params": {
+            "position_sizing": "fixed_fraction",
+            "fraction": 0.02,
+            "timeframe": "1d"
+        }
+    }
+
+
+def create_mock_news_data(
+    symbol: str = "AAPL",
+    count: int = 2,
+    sentiment_range: tuple = (-0.5, 0.5),
+) -> List[Dict[str, Any]]:
+    """
+    Create mock news items for testing.
+    
+    Args:
+        symbol: Stock symbol
+        count: Number of news items to generate
+        sentiment_range: Tuple of (min, max) sentiment scores
+    
+    Returns:
+        List of news item dictionaries
+    """
+    from datetime import datetime, timedelta
+    import random
+    
+    news_items = []
+    now = datetime.utcnow()
+    min_sentiment, max_sentiment = sentiment_range
+    
+    for i in range(count):
+        sentiment = random.uniform(min_sentiment, max_sentiment)
+        relevance = random.uniform(0.3, 0.9)
+        hours_ago = random.uniform(0, 24)
+        
+        news_items.append({
+            "symbol": symbol,
+            "headline": f"{symbol} news item {i+1}",
+            "content": f"Content for {symbol} news item {i+1}",
+            "timestamp": now - timedelta(hours=hours_ago),
+            "sentiment_score": sentiment,
+            "relevance_score": relevance,
+            "source": "mock",
+        })
+    
+    return news_items
+
+
+def create_mock_social_sentiment(
+    symbol: str = "AAPL",
+    platforms: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Create mock social media sentiment data for testing.
+    
+    Args:
+        symbol: Stock symbol
+        platforms: List of platforms (defaults to ["twitter", "reddit", "stocktwits"])
+    
+    Returns:
+        List of social sentiment dictionaries
+    """
+    from datetime import datetime, timedelta
+    import random
+    
+    if platforms is None:
+        platforms = ["twitter", "reddit", "stocktwits"]
+    
+    sentiments = []
+    now = datetime.utcnow()
+    
+    for platform in platforms:
+        sentiment = random.uniform(-0.5, 0.5)
+        volume = random.randint(10, 1000)
+        trending = volume > 500
+        hours_ago = random.uniform(0, 24)
+        
+        sentiments.append({
+            "symbol": symbol,
+            "platform": platform,
+            "sentiment_score": sentiment,
+            "volume": volume,
+            "timestamp": now - timedelta(hours=hours_ago),
+            "trending": trending,
+        })
+    
+    return sentiments
+
+
+def create_mock_decision_output(
+    recommended_actions: Optional[List[Order]] = None,
+    confidence_scores: Optional[Dict[str, float]] = None,
+    reasoning: str = "Test decision reasoning",
+) -> Dict[str, Any]:
+    """
+    Create a mock decision output for testing.
+    
+    Args:
+        recommended_actions: List of recommended orders
+        confidence_scores: Dictionary of symbol -> confidence score
+        reasoning: Decision reasoning text
+    
+    Returns:
+        Dictionary representing DecisionOutput
+    """
+    if recommended_actions is None:
+        recommended_actions = [create_mock_order()]
+    
+    if confidence_scores is None:
+        confidence_scores = {order.symbol: 0.75 for order in recommended_actions}
+    
+    return {
+        "recommended_actions": [
+            {
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": order.quantity,
+                "type": order.type,
+                "limit_price": order.limit_price,
+            }
+            for order in recommended_actions
+        ],
+        "confidence_scores": confidence_scores,
+        "reasoning": reasoning,
+        "source_contributions": [
+            {
+                "source": "strategy_metrics",
+                "weight": 0.4,
+                "reasoning": "Strategy metrics support entry"
+            },
+            {
+                "source": "news",
+                "weight": 0.3,
+                "reasoning": "News sentiment is neutral"
+            },
+            {
+                "source": "social_media",
+                "weight": 0.3,
+                "reasoning": "Social media sentiment is positive"
+            }
+        ],
+        "adjustments": ["Test adjustment"],
+    }
+

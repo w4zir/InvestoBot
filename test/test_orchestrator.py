@@ -428,6 +428,180 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(len(result.candidates), 0)
 
+    @patch('app.trading.orchestrator.market_data.load_data')
+    @patch('app.trading.orchestrator.instantiate_templates')
+    @patch('app.trading.orchestrator.run_backtest')
+    @patch('app.trading.orchestrator.generate_orders')
+    @patch('app.trading.orchestrator.risk_assess')
+    @patch('app.trading.orchestrator.is_kill_switch_enabled')
+    @patch('app.trading.orchestrator.get_persistence_service')
+    def test_template_only_strategy_run(
+        self,
+        mock_kill_switch,
+        mock_persistence,
+        mock_risk_assess,
+        mock_generate_orders,
+        mock_backtest,
+        mock_instantiate_templates,
+        mock_load_data,
+    ):
+        """Test strategy run with template_ids only (bypasses LLM for strategy generation)."""
+        from app.trading.models import BacktestResult, Order, RiskAssessment
+        
+        mock_kill_switch.return_value = False
+        mock_load_data.return_value = self.ohlcv_data
+        
+        strategy = create_mock_strategy_spec(strategy_id="template_strategy")
+        mock_instantiate_templates.return_value = [strategy]
+        
+        mock_backtest.return_value = BacktestResult(
+            strategy=strategy,
+            metrics=create_mock_strategy_spec().params,
+            trade_log=[],
+        )
+        
+        mock_generate_orders.return_value = [Order(symbol="AAPL", side="buy", quantity=10.0)]
+        mock_risk_assess.return_value = RiskAssessment(approved_trades=[Order(symbol="AAPL", side="buy", quantity=10.0)])
+        
+        request = StrategyRunRequest(
+            mission="Using predefined strategies",
+            template_ids=["volatility_breakout"],
+            context={"universe": ["AAPL"]},
+        )
+        
+        result = run_strategy_run(request)
+        
+        # Verify templates were instantiated (not LLM called for strategy generation)
+        mock_instantiate_templates.assert_called_once()
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result.candidates), 1)
+
+    @patch('app.trading.orchestrator.market_data.load_data')
+    @patch('app.trading.orchestrator.instantiate_templates')
+    @patch('app.trading.orchestrator.combine_strategies_with_llm')
+    @patch('app.trading.orchestrator.run_backtest')
+    @patch('app.trading.orchestrator.generate_orders')
+    @patch('app.trading.orchestrator.risk_assess')
+    @patch('app.trading.orchestrator.is_kill_switch_enabled')
+    @patch('app.trading.orchestrator.get_persistence_service')
+    def test_multiple_templates_combination(
+        self,
+        mock_kill_switch,
+        mock_persistence,
+        mock_risk_assess,
+        mock_generate_orders,
+        mock_backtest,
+        mock_combine_strategies,
+        mock_instantiate_templates,
+        mock_load_data,
+    ):
+        """Test that multiple templates are combined via LLM."""
+        from app.trading.models import BacktestResult, Order, RiskAssessment
+        
+        mock_kill_switch.return_value = False
+        mock_load_data.return_value = self.ohlcv_data
+        
+        strategy1 = create_mock_strategy_spec(strategy_id="template1")
+        strategy2 = create_mock_strategy_spec(strategy_id="template2")
+        combined_strategy = create_mock_strategy_spec(strategy_id="combined")
+        
+        mock_instantiate_templates.return_value = [strategy1, strategy2]
+        mock_combine_strategies.return_value = combined_strategy
+        
+        from test.test_helpers import create_mock_backtest_result
+        mock_backtest.return_value = create_mock_backtest_result(combined_strategy)
+        mock_generate_orders.return_value = [Order(symbol="AAPL", side="buy", quantity=10.0)]
+        mock_risk_assess.return_value = RiskAssessment(approved_trades=[Order(symbol="AAPL", side="buy", quantity=10.0)])
+        
+        request = StrategyRunRequest(
+            mission="Using predefined strategies",
+            template_ids=["volatility_breakout", "intraday_mean_reversion"],
+            context={"universe": ["AAPL"]},
+        )
+        
+        result = run_strategy_run(request)
+        
+        # Verify combine_strategies_with_llm was called
+        mock_combine_strategies.assert_called_once()
+        self.assertIsNotNone(result)
+
+    @patch('app.trading.orchestrator.market_data.load_data')
+    @patch('app.trading.orchestrator.instantiate_templates')
+    @patch('app.trading.orchestrator.generate_strategy_specs')
+    @patch('app.trading.orchestrator.run_backtest')
+    @patch('app.trading.orchestrator.generate_orders')
+    @patch('app.trading.orchestrator.risk_assess')
+    @patch('app.trading.external_data.get_news_provider')
+    @patch('app.trading.external_data.get_social_media_provider')
+    @patch('app.trading.decision_engine.DecisionEngine')
+    @patch('app.trading.orchestrator.is_kill_switch_enabled')
+    @patch('app.trading.orchestrator.get_persistence_service')
+    def test_multi_source_decision_enabled(
+        self,
+        mock_kill_switch,
+        mock_persistence,
+        mock_decision_engine_class,
+        mock_get_social_provider,
+        mock_get_news_provider,
+        mock_risk_assess,
+        mock_generate_orders,
+        mock_backtest,
+        mock_generate_strategies,
+        mock_instantiate_templates,
+        mock_load_data,
+    ):
+        """Test strategy run with multi-source decision enabled."""
+        from app.trading.models import BacktestResult, Order, RiskAssessment
+        from app.trading.external_data import MockNewsProvider, MockSocialMediaProvider
+        from app.trading.decision_engine import DecisionOutput
+        
+        mock_kill_switch.return_value = False
+        mock_load_data.return_value = self.ohlcv_data
+        
+        strategy = create_mock_strategy_spec(strategy_id="test_strategy")
+        mock_generate_strategies.return_value = [strategy]
+        mock_instantiate_templates.return_value = []
+        
+        mock_backtest.return_value = BacktestResult(
+            strategy=strategy,
+            metrics=create_mock_strategy_spec().params,
+            trade_log=[],
+        )
+        
+        original_orders = [Order(symbol="AAPL", side="buy", quantity=10.0)]
+        adjusted_orders = [Order(symbol="AAPL", side="buy", quantity=8.0)]  # Decision engine adjusted quantity
+        
+        mock_generate_orders.return_value = original_orders
+        mock_risk_assess.return_value = RiskAssessment(approved_trades=original_orders)
+        
+        # Mock external data providers
+        mock_news_provider = MockNewsProvider()
+        mock_social_provider = MockSocialMediaProvider()
+        mock_get_news_provider.return_value = mock_news_provider
+        mock_get_social_provider.return_value = mock_social_provider
+        
+        # Mock decision engine
+        mock_decision_engine = mock_decision_engine_class.return_value
+        mock_decision_engine.make_decision.return_value = DecisionOutput(
+            recommended_actions=adjusted_orders,
+            confidence_scores={"AAPL": 0.85},
+            reasoning="Adjusted based on news sentiment",
+            source_contributions=[],
+            adjustments=["Reduced quantity due to negative news"],
+        )
+        
+        request = StrategyRunRequest(
+            mission="Test mission",
+            enable_multi_source_decision=True,
+            context={"universe": ["AAPL"]},
+        )
+        
+        result = run_strategy_run(request)
+        
+        # Verify decision engine was called
+        mock_decision_engine.make_decision.assert_called_once()
+        self.assertIsNotNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()

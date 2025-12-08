@@ -548,6 +548,170 @@ cat response_execute.json | jq '.candidates[0].execution_fills'
 
 ---
 
+## Testing Predefined Strategies
+
+### Test: List Available Templates
+
+**Python Script**:
+```bash
+python test_api.py --test templates
+```
+
+**Manual curl**:
+```bash
+curl http://localhost:8000/strategies/templates | jq .
+```
+
+**Expected Response**:
+```json
+[
+  {
+    "template_id": "volatility_breakout",
+    "name": "Volatility Breakout",
+    "description": "Entry on volatility expansion above threshold, exit on reversion...",
+    "type": "volatility_breakout",
+    "required_params": {
+      "volatility_indicator": "atr",
+      "lookback_period": 20,
+      "volatility_threshold": 1.5
+    },
+    "optional_params": {
+      "entry_threshold": 1.5,
+      "exit_threshold": 0.8,
+      "stop_loss_pct": 0.02,
+      "take_profit_pct": 0.05
+    }
+  },
+  ...
+]
+```
+
+### Test: Run Strategy with Single Template
+
+**Python Script**:
+```bash
+python test_api.py --test template
+```
+
+**Manual curl**:
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Using predefined strategies",
+        "template_ids": ["volatility_breakout"],
+        "context": {
+          "universe": ["AAPL", "MSFT"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Notes**:
+- This bypasses LLM for strategy generation (faster execution)
+- Template is instantiated directly with provided universe
+- Response structure is same as custom mission runs
+
+### Test: Run Strategy with Multiple Templates (Combined)
+
+**Manual curl**:
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Using predefined strategies",
+        "template_ids": ["volatility_breakout", "intraday_mean_reversion"],
+        "context": {
+          "universe": ["AAPL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Notes**:
+- Multiple templates are instantiated and backtested individually
+- LLM is called to combine them into a unified strategy
+- Final result is a single combined strategy
+
+### Test: Mixed Mode (Templates + Custom Mission)
+
+**Manual curl**:
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Find momentum strategies for tech stocks",
+        "template_ids": ["volatility_breakout"],
+        "context": {
+          "universe": ["AAPL", "MSFT", "GOOGL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Notes**:
+- Both template strategies and LLM-generated strategies are included
+- All strategies are backtested and evaluated together
+
+## Testing Multi-Source Decision Framework
+
+### Test: Enable Multi-Source Decision
+
+**Python Script**:
+```bash
+python test_api.py --test multi-source
+```
+
+**Manual curl**:
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Find momentum strategies",
+        "template_ids": ["volatility_breakout"],
+        "enable_multi_source_decision": true,
+        "context": {
+          "universe": ["AAPL", "MSFT"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Expected Behavior**:
+1. Strategy is backtested as usual
+2. Risk assessment is performed
+3. News data is fetched (mock provider generates synthetic news)
+4. Social media sentiment is fetched (mock provider generates synthetic sentiment)
+5. Decision engine analyzes all sources and makes final recommendations
+6. Final orders reflect decision engine output (may differ from risk assessment)
+
+**Notes**:
+- Currently uses mock data providers (synthetic news and sentiment)
+- Decision engine uses LLM to analyze all sources
+- Check logs for decision engine reasoning and adjustments
+- If decision engine fails, system falls back to risk assessment orders
+
+### Test: Multi-Source Decision with Custom Mission
+
+**Manual curl**:
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Find momentum strategies for tech stocks",
+        "enable_multi_source_decision": true,
+        "context": {
+          "universe": ["AAPL", "MSFT", "GOOGL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
 ## Edge Cases & Error Handling
 
 ### Test 8: Missing Market Data

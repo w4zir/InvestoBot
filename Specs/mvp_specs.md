@@ -42,10 +42,13 @@ Primary goals:
 
 1. Able to ingest historical OHLCV (1m/5m/1d) and run backtests across a chosen universe (10 tickers).
 2. LLM planner can propose at least 3 candidate strategies per run, each backtested with a summary report.
-3. Risk engine enforces per-trade max loss and portfolio exposure limits — no simulated trade exceeds set limits.
-4. Paper broker adapter executes orders in a sandbox and records fills with timestamps and slippage model.
-5. Dashboard shows P&L, exposure, and agent trace for each strategy execution.
-6. Automated evaluation harness accepts/rejects strategies against golden dataset rules.
+3. **Predefined strategy templates** can be instantiated directly (bypassing LLM) for faster execution.
+4. **Multiple templates** can be combined intelligently using LLM to create unified strategies.
+5. Risk engine enforces per-trade max loss and portfolio exposure limits — no simulated trade exceeds set limits.
+6. **Multi-source decision framework** combines strategy metrics, news sentiment, and social media sentiment for final decisions (skeleton implemented with mock providers).
+7. Paper broker adapter executes orders in a sandbox and records fills with timestamps and slippage model.
+8. Dashboard shows P&L, exposure, and agent trace for each strategy execution.
+9. Automated evaluation harness accepts/rejects strategies against golden dataset rules.
 
 
 ## Components & responsibilities
