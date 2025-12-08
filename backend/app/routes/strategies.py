@@ -4,15 +4,27 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.agents.strategy_templates import get_template_registry
 from app.core.logging import add_log_context, get_logger, LogContext
 from app.trading.db_models import StrategyRunDB, StrategyRunWithDetails
 from app.trading.models import StrategyRunRequest, StrategyRunResponse
 from app.trading.orchestrator import run_strategy_run
 from app.trading.persistence import get_persistence_service
+from pydantic import BaseModel
 
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+class TemplateInfo(BaseModel):
+    """Template information for API responses."""
+    template_id: str
+    name: str
+    description: str
+    type: str
+    required_params: dict
+    optional_params: dict
 
 
 @router.post("/run", response_model=StrategyRunResponse)
@@ -158,6 +170,33 @@ async def get_strategy_history(strategy_id: str) -> dict:
         }
     except Exception as e:
         logger.error(f"Failed to get strategy history for {strategy_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/templates", response_model=List[TemplateInfo])
+async def list_strategy_templates() -> List[TemplateInfo]:
+    """
+    List all available strategy templates.
+    
+    Returns a list of predefined strategy templates that can be instantiated directly.
+    """
+    try:
+        registry = get_template_registry()
+        templates = registry.list_all()
+        
+        return [
+            TemplateInfo(
+                template_id=template.template_id,
+                name=template.name,
+                description=template.description,
+                type=template.type,
+                required_params=template.required_params,
+                optional_params=template.optional_params,
+            )
+            for template in templates
+        ]
+    except Exception as e:
+        logger.error(f"Failed to list strategy templates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

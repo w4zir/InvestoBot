@@ -86,9 +86,20 @@ export interface CandidateResult {
   gating?: any | null;
 }
 
+export interface TemplateInfo {
+  template_id: string;
+  name: string;
+  description: string;
+  type: string;
+  required_params: Record<string, any>;
+  optional_params: Record<string, any>;
+}
+
 export interface StrategyRunRequest {
   mission: string;
   context: Record<string, any>;
+  template_ids?: string[] | null;
+  enable_multi_source_decision?: boolean;
 }
 
 export interface StrategyRunResponse {
@@ -205,5 +216,10 @@ export async function getOpenOrders(): Promise<OpenOrdersResponse> {
 
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {
   return fetchAPI<SchedulerStatus>('/control/scheduler/status');
+}
+
+// Strategy templates
+export async function getStrategyTemplates(): Promise<TemplateInfo[]> {
+  return fetchAPI<TemplateInfo[]>('/strategies/templates');
 }
 

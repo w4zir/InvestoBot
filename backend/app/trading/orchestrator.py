@@ -2,7 +2,11 @@ import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from app.agents.strategy_planner import generate_strategy_specs
+from app.agents.strategy_planner import (
+    combine_strategies_with_llm,
+    generate_strategy_specs,
+    instantiate_templates,
+)
 from app.core.config import get_settings
 from app.core.logging import add_log_context, get_logger, LogContext
 from app.core.repository import RunRepository
@@ -22,6 +26,8 @@ from app.trading.models import (
     ValidationConfig,
     WalkForwardResult,
 )
+from app.trading.decision_engine import DecisionEngine, DecisionInput
+from app.trading.external_data import get_news_provider, get_social_media_provider
 from app.trading.order_generator import generate_orders
 from app.trading.persistence import get_persistence_service
 from app.trading.risk_engine import risk_assess
@@ -170,10 +176,70 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
     
     logger.info(
         "Starting strategy run",
-        extra={"mission": mission, "universe": universe, "data_range": data_range, "timeframe": timeframe, "run_id": run_id},
+        extra={
+            "mission": mission,
+            "universe": universe,
+            "data_range": data_range,
+            "timeframe": timeframe,
+            "run_id": run_id,
+            "template_ids": payload.template_ids,
+            "enable_multi_source_decision": payload.enable_multi_source_decision,
+        },
     )
 
-    strategies: List[StrategySpec] = generate_strategy_specs(mission=mission, context=context)
+    # Handle strategy generation: templates, custom mission, or both
+    strategies: List[StrategySpec] = []
+    template_strategies: List[StrategySpec] = []
+    custom_strategies: List[StrategySpec] = []
+    
+    # Instantiate templates if provided
+    if payload.template_ids:
+        logger.info(f"Instantiating {len(payload.template_ids)} templates: {payload.template_ids}")
+        template_strategies = instantiate_templates(
+            template_ids=payload.template_ids,
+            universe=universe,
+        )
+        strategies.extend(template_strategies)
+    
+    # Generate custom strategies from mission if provided
+    if mission and mission.strip():
+        logger.info("Generating custom strategies from mission")
+        custom_strategies = generate_strategy_specs(mission=mission, context=context)
+        strategies.extend(custom_strategies)
+    
+    # If no strategies generated, raise error
+    if not strategies:
+        raise ValueError("No strategies generated. Provide either template_ids or a mission.")
+    
+    # If multiple templates selected, combine them into a single strategy
+    if len(template_strategies) > 1:
+        logger.info(f"Combining {len(template_strategies)} template strategies using LLM")
+        # Run quick backtests on individual strategies for context
+        start_dt, end_dt = _parse_date_range(data_range)
+        ohlcv_temp = market_data.load_data(universe=universe, start=start_dt, end=end_dt, timeframe=timeframe)
+        
+        template_backtests: List[BacktestResult] = []
+        for template_spec in template_strategies:
+            try:
+                bt_request = BacktestRequest(
+                    strategy=template_spec,
+                    data_range=data_range,
+                    costs={"commission": 0.001, "slippage_pct": 0.0005},
+                )
+                backtest_result = run_backtest(bt_request, ohlcv_data=ohlcv_temp)
+                template_backtests.append(backtest_result)
+            except Exception as e:
+                logger.warning(f"Failed to backtest template {template_spec.strategy_id} for combination: {e}")
+        
+        # Combine strategies
+        combined_strategy = combine_strategies_with_llm(
+            strategies=template_strategies,
+            backtest_results=template_backtests if template_backtests else None,
+        )
+        
+        # Replace template strategies with combined strategy
+        strategies = [combined_strategy] + custom_strategies
+        logger.info(f"Combined {len(template_strategies)} templates into single strategy {combined_strategy.strategy_id}")
 
     start_dt, end_dt = _parse_date_range(data_range)
     ohlcv = market_data.load_data(universe=universe, start=start_dt, end=end_dt, timeframe=timeframe)
@@ -303,6 +369,54 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
             },
         )
 
+        # Multi-source decision engine (if enabled)
+        final_orders = assessment.approved_trades
+        if payload.enable_multi_source_decision:
+            try:
+                logger.info(f"Running multi-source decision engine for strategy {spec.strategy_id}")
+                
+                # Collect external data
+                news_provider = get_news_provider("mock")
+                social_provider = get_social_media_provider("mock")
+                
+                news_data = news_provider.get_news(symbols=universe, timeframe_hours=24)
+                social_sentiment = social_provider.get_sentiment(symbols=universe, timeframe_hours=24)
+                
+                # Create decision input
+                decision_input = DecisionInput(
+                    strategy_metrics=[backtest_result.metrics],
+                    news_data=news_data,
+                    social_sentiment=social_sentiment,
+                    current_prices=latest_prices,
+                    proposed_orders=assessment.approved_trades,
+                    risk_assessment=assessment,
+                )
+                
+                # Make decision
+                decision_engine = DecisionEngine()
+                decision_output = decision_engine.make_decision(decision_input)
+                
+                # Use decision engine recommendations
+                final_orders = decision_output.recommended_actions
+                
+                logger.info(
+                    f"Decision engine adjusted orders: {len(assessment.approved_trades)} -> {len(final_orders)}",
+                    extra={
+                        "strategy_id": spec.strategy_id,
+                        "original_count": len(assessment.approved_trades),
+                        "final_count": len(final_orders),
+                        "adjustments": decision_output.adjustments,
+                    }
+                )
+                
+                # Log decision reasoning
+                logger.debug(f"Decision engine reasoning: {decision_output.reasoning}")
+                
+            except Exception as e:
+                logger.error(f"Decision engine failed for strategy {spec.strategy_id}: {e}", exc_info=True)
+                # Continue with original risk assessment orders
+                final_orders = assessment.approved_trades
+
         # Check gating before execution
         execution_blocked = False
         execution_error: Optional[str] = None
@@ -320,7 +434,7 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                 )
 
         # Save pre-execution portfolio snapshot
-        if should_execute and assessment.approved_trades and not execution_blocked:
+        if should_execute and final_orders and not execution_blocked:
             try:
                 persistence = get_persistence_service()
                 persistence.save_portfolio_snapshot(
@@ -328,7 +442,7 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
                     run_id=run_id,
                     strategy_id=spec.strategy_id,
                     snapshot_type="pre_execution",
-                    notes=f"Portfolio state before executing {len(assessment.approved_trades)} approved orders",
+                    notes=f"Portfolio state before executing {len(final_orders)} approved orders",
                     latest_prices=latest_prices,
                 )
             except Exception as e:
@@ -336,7 +450,7 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
         
         # Execute orders if enabled and approved
         fills: List[Fill] = []
-        if should_execute and assessment.approved_trades and not execution_blocked:
+        if should_execute and final_orders and not execution_blocked:
             # Safety check: only execute in non-dev environments or with explicit flag
             allow_execute = settings.env != "dev" or os.getenv("ALLOW_EXECUTE", "false").lower() == "true"
             if not allow_execute:
@@ -345,7 +459,7 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
             else:
                 try:
                     broker = get_broker()
-                    fills = broker.execute_orders(assessment.approved_trades)
+                    fills = broker.execute_orders(final_orders)
                     logger.info(
                         f"Executed {len(fills)} orders for strategy {spec.strategy_id}",
                         extra={"strategy_id": spec.strategy_id, "fill_count": len(fills)},

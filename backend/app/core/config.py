@@ -103,6 +103,19 @@ class BrokerSettings(BaseModel):
     )  # List of backup broker names
 
 
+class ExternalDataSettings(BaseModel):
+    """External data provider settings for news and social media."""
+    news_provider: str = Field(default_factory=lambda: os.getenv("NEWS_PROVIDER", "mock"))  # "mock", "newsapi", "alpha_vantage"
+    social_media_provider: str = Field(default_factory=lambda: os.getenv("SOCIAL_MEDIA_PROVIDER", "mock"))  # "mock", "twitter", "reddit"
+    enable_news_integration: bool = Field(default_factory=lambda: os.getenv("ENABLE_NEWS_INTEGRATION", "true").lower() == "true")
+    enable_social_integration: bool = Field(default_factory=lambda: os.getenv("ENABLE_SOCIAL_INTEGRATION", "true").lower() == "true")
+    # API keys for future providers
+    newsapi_key: Optional[str] = Field(default_factory=lambda: os.getenv("NEWSAPI_KEY"))
+    twitter_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("TWITTER_API_KEY"))
+    reddit_client_id: Optional[str] = Field(default_factory=lambda: os.getenv("REDDIT_CLIENT_ID"))
+    reddit_client_secret: Optional[str] = Field(default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET"))
+
+
 class AppSettings(BaseModel):
     """Top-level application settings container."""
 
@@ -117,6 +130,7 @@ class AppSettings(BaseModel):
     risk: RiskSettings = RiskSettings()
     data: DataSettings = DataSettings()
     broker: BrokerSettings = BrokerSettings()
+    external_data: ExternalDataSettings = ExternalDataSettings()
 
 
 @lru_cache(maxsize=1)

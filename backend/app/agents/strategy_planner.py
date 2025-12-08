@@ -4,9 +4,10 @@ from typing import Any, Dict, List, Set
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.trading.models import StrategySpec
+from app.trading.models import BacktestResult, StrategySpec
 
 from .google_client import get_google_agent_client
+from .strategy_templates import instantiate_template
 
 
 logger = get_logger(__name__)
@@ -249,6 +250,92 @@ def _calculate_strategy_similarity(strategy1: StrategySpec, strategy2: StrategyS
                 similarity += 0.2
     
     return min(similarity, 1.0)
+
+
+def instantiate_templates(
+    template_ids: List[str],
+    universe: List[str],
+    param_overrides: Optional[Dict[str, Any]] = None,
+) -> List[StrategySpec]:
+    """
+    Instantiate multiple strategy templates directly (bypasses LLM).
+    
+    Args:
+        template_ids: List of template IDs to instantiate
+        universe: List of symbols to trade
+        param_overrides: Optional parameter overrides (future enhancement)
+    
+    Returns:
+        List of instantiated StrategySpec objects
+    """
+    strategies: List[StrategySpec] = []
+    
+    for template_id in template_ids:
+        try:
+            strategy = instantiate_template(
+                template_id=template_id,
+                universe=universe,
+                param_overrides=param_overrides,
+            )
+            # Validate constraints
+            validation_errors = _validate_strategy_constraints(strategy)
+            if validation_errors:
+                logger.warning(
+                    "Template %s instantiation failed validation: %s",
+                    template_id,
+                    "; ".join(validation_errors)
+                )
+                strategy = _fix_strategy_constraints(strategy)
+            strategies.append(strategy)
+            logger.info(f"Instantiated template {template_id} as strategy {strategy.strategy_id}")
+        except ValueError as e:
+            logger.error(f"Failed to instantiate template {template_id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error instantiating template {template_id}: {e}", exc_info=True)
+            raise
+    
+    logger.info(f"Instantiated {len(strategies)} templates", extra={"template_count": len(strategies)})
+    return strategies
+
+
+def combine_strategies_with_llm(
+    strategies: List[StrategySpec],
+    backtest_results: Optional[List[BacktestResult]] = None,
+) -> StrategySpec:
+    """
+    Use LLM to combine multiple strategies into a unified strategy.
+    
+    Args:
+        strategies: List of StrategySpec objects to combine
+        backtest_results: Optional list of BacktestResult objects for context
+    
+    Returns:
+        Combined StrategySpec that merges strengths of input strategies
+    """
+    if len(strategies) == 0:
+        raise ValueError("Cannot combine empty list of strategies")
+    
+    if len(strategies) == 1:
+        logger.info("Only one strategy provided, returning as-is")
+        return strategies[0]
+    
+    logger.info(f"Combining {len(strategies)} strategies using LLM")
+    
+    client = get_google_agent_client()
+    combined_strategy = client.combine_strategies(strategies, backtest_results)
+    
+    # Validate the combined strategy
+    validation_errors = _validate_strategy_constraints(combined_strategy)
+    if validation_errors:
+        logger.warning(
+            "Combined strategy failed validation: %s",
+            "; ".join(validation_errors)
+        )
+        combined_strategy = _fix_strategy_constraints(combined_strategy)
+    
+    logger.info(f"Successfully combined strategies into {combined_strategy.strategy_id}")
+    return combined_strategy
 
 
 

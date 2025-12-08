@@ -4,8 +4,11 @@ Strategy templates for common trading patterns.
 Templates provide structured patterns that the LLM can instantiate with parameters,
 while still allowing for custom strategy generation.
 """
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+
+from app.trading.models import StrategyParams, StrategyRule, StrategySpec
 
 
 class StrategyTemplate(BaseModel):
@@ -229,4 +232,78 @@ _template_registry = TemplateRegistry()
 def get_template_registry() -> TemplateRegistry:
     """Get the global template registry."""
     return _template_registry
+
+
+def instantiate_template(
+    template_id: str,
+    universe: List[str],
+    param_overrides: Optional[Dict[str, Any]] = None,
+) -> StrategySpec:
+    """
+    Instantiate a strategy template into a StrategySpec.
+    
+    Args:
+        template_id: ID of the template to instantiate
+        universe: List of symbols to trade
+        param_overrides: Optional parameter overrides (future enhancement)
+    
+    Returns:
+        StrategySpec instance ready for backtesting
+    
+    Raises:
+        ValueError: If template_id is not found
+    """
+    registry = get_template_registry()
+    template = registry.get(template_id)
+    
+    if not template:
+        raise ValueError(f"Template not found: {template_id}")
+    
+    # Generate unique strategy_id
+    timestamp = int(datetime.utcnow().timestamp())
+    strategy_id = f"{template_id}_{timestamp}"
+    
+    # Convert example_rules to StrategyRule objects
+    rules: List[StrategyRule] = []
+    for rule_dict in template.example_rules:
+        # Update universe-specific params in rules (e.g., for pairs trading)
+        rule_params = rule_dict.get("params", {}).copy()
+        
+        # Handle pairs trading special case - update symbols in params
+        if template.type == "pairs_trading" and len(universe) >= 2:
+            if "symbol1" in rule_params:
+                rule_params["symbol1"] = universe[0]
+            if "symbol2" in rule_params:
+                rule_params["symbol2"] = universe[1]
+        
+        rules.append(
+            StrategyRule(
+                type=rule_dict.get("type", "entry"),
+                indicator=rule_dict.get("indicator", ""),
+                params=rule_params,
+            )
+        )
+    
+    # Convert example_params to StrategyParams
+    params_dict = template.example_params.copy()
+    if param_overrides:
+        params_dict.update(param_overrides)
+    
+    # Handle timeframe from params if present
+    timeframe = params_dict.get("timeframe", "1d")
+    
+    params = StrategyParams(
+        position_sizing=params_dict.get("position_sizing", "fixed_fraction"),
+        fraction=params_dict.get("fraction", 0.02),
+        timeframe=timeframe,
+    )
+    
+    return StrategySpec(
+        strategy_id=strategy_id,
+        name=f"{template.name} ({template_id})",
+        description=template.description,
+        universe=universe,
+        rules=rules,
+        params=params,
+    )
 

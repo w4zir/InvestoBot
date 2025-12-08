@@ -321,6 +321,131 @@ OUTPUT FORMAT:
 """
         
         return version_comment + base_prompt + risk_constraints + template_section + examples_section
+    
+    def combine_strategies(
+        self,
+        strategies: List[Any],
+        backtest_results: Optional[List[Any]] = None,
+    ) -> Any:
+        """
+        Use LLM to combine multiple strategies into a unified strategy.
+        
+        Args:
+            strategies: List of StrategySpec objects to combine
+            backtest_results: Optional list of BacktestResult objects for context
+        
+        Returns:
+            Combined StrategySpec
+        """
+        from app.trading.models import StrategySpec
+        
+        logger.info(
+            "Calling Google Agent for strategy combination",
+            extra={"strategy_count": len(strategies), "prompt_version": self._prompt_version}
+        )
+        
+        # Build prompt for strategy combination
+        strategies_json = [s.model_dump() if isinstance(s, StrategySpec) else s for s in strategies]
+        
+        # Include backtest results if available
+        backtest_context = ""
+        if backtest_results:
+            backtest_context = "\n\nBacktest Results:\n"
+            for i, result in enumerate(backtest_results):
+                if hasattr(result, 'metrics'):
+                    backtest_context += f"Strategy {i+1} ({strategies[i].strategy_id if i < len(strategies) else 'unknown'}):\n"
+                    backtest_context += f"  Sharpe: {result.metrics.sharpe:.3f}\n"
+                    backtest_context += f"  Max Drawdown: {result.metrics.max_drawdown:.3f}\n"
+                    if result.metrics.total_return is not None:
+                        backtest_context += f"  Total Return: {result.metrics.total_return:.3f}\n"
+        
+        prompt = f"""You are an investment strategy planner. Your task is to combine multiple trading strategies into a single unified strategy that captures the strengths of all input strategies.
+
+INPUT STRATEGIES:
+{json.dumps({"strategies": strategies_json}, indent=2)}
+{backtest_context}
+
+TASK:
+Create a single unified strategy that:
+1. Combines the best entry/exit rules from the input strategies
+2. Uses complementary indicators that work well together
+3. Maintains risk constraints (position sizing fraction 0.01-0.05)
+4. Works with the provided universe of symbols
+
+OUTPUT FORMAT (JSON only, no markdown):
+{{
+  "strategy_id": "combined_strategy_<timestamp>",
+  "name": "Combined Strategy Name",
+  "description": "Description of how strategies are combined",
+  "universe": ["SYMBOL1", "SYMBOL2", ...],
+  "rules": [
+    {{"type": "entry", "indicator": "...", "params": {{...}}}},
+    {{"type": "exit", "indicator": "...", "params": {{...}}}}
+  ],
+  "params": {{
+    "position_sizing": "fixed_fraction",
+    "fraction": 0.02,
+    "timeframe": "1d"
+  }}
+}}
+
+IMPORTANT: Output ONLY the JSON object, no markdown, no code blocks, no explanations.
+"""
+        
+        try:
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.warning("Google API rate limited during strategy combination", exc_info=True)
+                raise RuntimeError(f"Rate limited: {error_msg}") from exc
+            logger.error("Google API call failed during strategy combination", exc_info=True)
+            raise RuntimeError(f"Failed to call Google Agent API: {error_msg}") from exc
+        
+        # Extract response text
+        try:
+            candidate = response.candidates[0]
+            text = candidate.content.parts[0].text  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.error("Failed to read response from Google Agent", exc_info=True)
+            raise RuntimeError("Invalid response from Google Agent") from exc
+        
+        # Extract and validate JSON
+        json_text = self._extract_and_validate_json(text)
+        
+        try:
+            payload = json.loads(json_text)
+        except json.JSONDecodeError as e:
+            logger.error("Invalid JSON from Google Agent during combination", extra={"json_text": json_text[:500], "error": str(e)})
+            raise ValueError(f"Invalid JSON in response: {str(e)}") from e
+        
+        # The response should have a single strategy (not a list)
+        if "strategies" in payload:
+            strategies_data = payload["strategies"]
+            if len(strategies_data) > 0:
+                strategy_data = strategies_data[0]
+            else:
+                raise ValueError("Empty strategies array in response")
+        else:
+            # Direct strategy object
+            strategy_data = payload
+        
+        # Validate and create StrategySpec
+        try:
+            combined_strategy = StrategySpec.model_validate(strategy_data)
+            logger.info(f"Successfully combined strategies into {combined_strategy.strategy_id}")
+            return combined_strategy
+        except Exception as e:
+            logger.error(f"Failed to validate combined strategy: {e}", exc_info=True)
+            raise ValueError(f"Invalid strategy spec in response: {str(e)}") from e
 
 
 _client_instance: GoogleAgentClient | None = None

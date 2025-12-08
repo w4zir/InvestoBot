@@ -126,6 +126,8 @@ class RiskAssessment(BaseModel):
 class StrategyRunRequest(BaseModel):
     mission: str
     context: Dict[str, Any] = Field(default_factory=dict)
+    template_ids: Optional[List[str]] = Field(default=None, description="List of template IDs to instantiate directly (bypasses LLM)")
+    enable_multi_source_decision: bool = Field(default=False, description="Enable multi-source decision framework (news + social media)")
 
 
 class CandidateResult(BaseModel):
