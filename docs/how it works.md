@@ -212,7 +212,95 @@ Notes:
 - **`validation`** field contains walk-forward validation results if enabled (see section 2.9).
 - **`gating`** field contains scenario gating results if enabled (see section 2.10).
 
-### 1.5 Enabling real paper execution (careful!)
+### 1.5 Using Predefined Strategies
+
+Instead of generating strategies from a mission, you can use predefined strategy templates that bypass the LLM for faster execution.
+
+**List available templates:**
+```bash
+curl http://localhost:8000/strategies/templates | jq .
+```
+
+**Run with a single template:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Using predefined strategies",
+        "template_ids": ["volatility_breakout"],
+        "context": {
+          "universe": ["AAPL", "MSFT"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Run with multiple templates (will be combined via LLM):**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Using predefined strategies",
+        "template_ids": ["volatility_breakout", "intraday_mean_reversion"],
+        "context": {
+          "universe": ["AAPL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+**Combine templates with custom mission:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Find momentum strategies for tech stocks",
+        "template_ids": ["volatility_breakout"],
+        "context": {
+          "universe": ["AAPL", "MSFT", "GOOGL"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+Available templates:
+- `volatility_breakout` - Entry on volatility expansion, exit on reversion
+- `pairs_trading` - Cointegration-based pairs trading with spread mean-reversion (requires 2 symbols)
+- `intraday_mean_reversion` - Short-term mean reversion using z-score thresholds
+
+### 1.6 Multi-Source Decision Framework
+
+Enable the multi-source decision framework to combine strategy metrics, news sentiment, and social media sentiment for final trading decisions.
+
+**Run with multi-source decision enabled:**
+```bash
+curl -X POST http://localhost:8000/strategies/run \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mission": "Find momentum strategies",
+        "template_ids": ["volatility_breakout"],
+        "enable_multi_source_decision": true,
+        "context": {
+          "universe": ["AAPL", "MSFT"],
+          "data_range": "2023-01-01:2023-06-30",
+          "execute": false
+        }
+      }' | jq .
+```
+
+When enabled, the system:
+1. Runs backtest and risk assessment as usual
+2. Fetches news data for symbols in universe
+3. Fetches social media sentiment for symbols
+4. Uses LLM to analyze all sources and make final recommendations
+5. Adjusts orders based on external signals (news/sentiment)
+
+Currently uses mock data providers for development. Real providers (NewsAPI, Twitter API, etc.) can be integrated by implementing the provider interfaces in `backend/app/trading/external_data.py`.
+
+### 1.7 Enabling real paper execution (careful!)
 
 By default, the orchestrator will **not** send orders to Alpaca in `APP_ENV=dev`.
 
@@ -288,10 +376,12 @@ async def run_strategy(payload: StrategyRunRequest) -> StrategyRunResponse:
 
 `StrategyRunRequest` is a Pydantic model:
 
-```78:88:backend/app/trading/models.py
+```126:130:backend/app/trading/models.py
 class StrategyRunRequest(BaseModel):
     mission: str
     context: Dict[str, Any] = Field(default_factory=dict)
+    template_ids: Optional[List[str]] = Field(default=None, description="List of template IDs to instantiate directly (bypasses LLM)")
+    enable_multi_source_decision: bool = Field(default=False, description="Enable multi-source decision framework (news + social media)")
 ```
 
 FastAPI validates the JSON into this model, then calls `run_strategy_run` in the orchestrator.
@@ -300,7 +390,7 @@ FastAPI validates the JSON into this model, then calls `run_strategy_run` in the
 
 Core orchestration happens in `backend/app/trading/orchestrator.py`:
 
-```40:57:backend/app/trading/orchestrator.py
+```147:212:backend/app/trading/orchestrator.py
 def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
     mission = payload.mission
     context = payload.context
@@ -308,7 +398,33 @@ def run_strategy_run(payload: StrategyRunRequest) -> StrategyRunResponse:
     universe = context.get("universe") or settings.data.default_universe
     data_range = context.get("data_range") or _default_date_range()
 
-    strategies: List[StrategySpec] = generate_strategy_specs(mission=mission, context=context)
+    # Handle strategy generation: templates, custom mission, or both
+    strategies: List[StrategySpec] = []
+    template_strategies: List[StrategySpec] = []
+    custom_strategies: List[StrategySpec] = []
+    
+    # Instantiate templates if provided
+    if payload.template_ids:
+        template_strategies = instantiate_templates(
+            template_ids=payload.template_ids,
+            universe=universe,
+        )
+        strategies.extend(template_strategies)
+    
+    # Generate custom strategies from mission if provided
+    if mission and mission.strip():
+        custom_strategies = generate_strategy_specs(mission=mission, context=context)
+        strategies.extend(custom_strategies)
+    
+    # If multiple templates selected, combine them into a single strategy
+    if len(template_strategies) > 1:
+        # Run quick backtests on individual strategies for context
+        # Then combine using LLM
+        combined_strategy = combine_strategies_with_llm(
+            strategies=template_strategies,
+            backtest_results=template_backtests,
+        )
+        strategies = [combined_strategy] + custom_strategies
 
     start_dt, end_dt = _parse_date_range(data_range)
     ohlcv = market_data.load_data(universe=universe, start=start_dt, end=end_dt)
@@ -341,7 +457,34 @@ High-level orchestration steps:
    - Optionally execute approved trades via Alpaca.
 7. Aggregate everything into a `StrategyRunResponse`.
 
-### 2.3 LLM planner – Google Agent client and strategy parsing
+### 2.3 Strategy Generation – Templates vs LLM
+
+The orchestrator supports three modes of strategy generation:
+
+**Mode 1: Template-only (bypasses LLM)**
+- If `template_ids` is provided and `mission` is empty or placeholder
+- Templates are instantiated directly via `agents.strategy_templates.instantiate_template()`
+- Each template uses its `example_rules` and `example_params` with the provided universe
+- No LLM call is made, resulting in faster execution
+
+**Mode 2: Multiple Templates (uses LLM for combination)**
+- If multiple `template_ids` are provided
+- Each template is instantiated and backtested individually
+- LLM is called via `agents.strategy_planner.combine_strategies_with_llm()` to create a unified strategy
+- The combined strategy captures strengths from all input templates
+
+**Mode 3: Custom Mission (uses LLM)**
+- If `mission` is provided (with or without templates)
+- LLM generates strategies based on the mission via `agents.strategy_planner.generate_strategy_specs()`
+- If templates are also provided, both are included in the final strategy list
+
+**Mode 4: Mixed (templates + custom)**
+- Both `template_ids` and `mission` are provided
+- Templates are instantiated directly
+- Custom strategies are generated via LLM
+- All strategies are included in the run
+
+### 2.4 LLM planner – Google Agent client and strategy parsing
 
 The Google client is in `backend/app/agents/google_client.py`:
 
@@ -400,7 +543,7 @@ This phase:
 - Extracts JSON even if the model returns fenced code blocks.
 - Validates each strategy into a strongly-typed `StrategySpec`.
 
-### 2.4 Market data – synthetic vs Yahoo Finance
+### 2.5 Market data – synthetic vs Yahoo Finance
 
 `backend/app/trading/market_data.py`:
 
@@ -426,7 +569,7 @@ def load_data(universe: List[str], start: datetime, end: datetime) -> Dict[str, 
 - `DATA_SOURCE=synthetic` → generates a simple random-walk-like price series.
 - `DATA_SOURCE=yahoo` → uses `yfinance` to download OHLCV bars for each symbol.
 
-### 2.5 Backtester – event-driven loop and metrics
+### 2.6 Backtester – event-driven loop and metrics
 
 The backtester lives in `backend/app/trading/backtester.py`. It:
 - Extracts prices from OHLCV bars.
@@ -554,7 +697,54 @@ This enforces:
 - **Per-trade exposure vs portfolio**.
 - **Blacklist** of symbols.
 
-### 2.7 Broker adapter – Alpaca paper trading
+### 2.8 Multi-Source Decision Framework (optional)
+
+When `enable_multi_source_decision` is set to `true` in the request, after risk assessment, the orchestrator:
+
+1. **Collects External Data**:
+   - Fetches news items for symbols in universe via `trading.external_data.get_news_provider()`
+   - Fetches social media sentiment via `trading.external_data.get_social_media_provider()`
+   - Currently uses mock providers that generate synthetic data
+
+2. **Creates Decision Input**:
+   - Combines strategy backtest metrics, news data, social sentiment, current prices, proposed orders, and risk assessment
+   - Passes to `trading.decision_engine.DecisionEngine.make_decision()`
+
+3. **LLM Analysis**:
+   - Decision engine uses Google Agent to analyze all sources
+   - Considers if news/sentiment contradicts or supports strategy signals
+   - Adjusts order sizes or cancels orders if external signals are strongly negative
+   - Increases confidence for orders where all sources align positively
+
+4. **Final Recommendations**:
+   - Returns `DecisionOutput` with recommended actions, confidence scores, reasoning, and adjustments
+   - Orchestrator uses these recommendations as final orders instead of risk assessment output
+
+The decision engine prompt includes:
+- Strategy metrics (Sharpe, drawdown, returns)
+- News headlines with sentiment and relevance scores
+- Social media sentiment by platform with volume and trending status
+- Current prices and proposed orders
+- Risk assessment results
+
+Example decision engine output:
+```json
+{
+  "recommended_actions": [
+    {"symbol": "AAPL", "side": "buy", "quantity": 8, "type": "market"}
+  ],
+  "confidence_scores": {"AAPL": 0.85, "MSFT": 0.60},
+  "reasoning": "Reduced AAPL quantity due to negative news sentiment, increased MSFT confidence due to positive social media trends",
+  "source_contributions": [
+    {"source": "strategy_metrics", "weight": 0.4, "reasoning": "Strong Sharpe ratio supports entry"},
+    {"source": "news", "weight": 0.3, "reasoning": "Negative news suggests caution"},
+    {"source": "social_media", "weight": 0.3, "reasoning": "Mixed sentiment across platforms"}
+  ],
+  "adjustments": ["Reduced AAPL quantity due to negative news", "Increased MSFT confidence due to positive sentiment"]
+}
+```
+
+### 2.9 Broker adapter – Alpaca paper trading
 
 The adapter lives in `backend/app/trading/broker_alpaca.py`:
 
@@ -596,7 +786,7 @@ The orchestrator:
   - `context.execute` is true **and**
   - The environment allows it (`ALLOW_EXECUTE` or non-dev).
 
-### 2.8 Walk-forward validation (optional)
+### 2.10 Walk-forward validation (optional)
 
 If `context.validation.walk_forward=true` or `context.validation.train_split > 0`, the orchestrator runs walk-forward validation via `backend/app/trading/validation.py`:
 
@@ -630,7 +820,7 @@ Walk-forward validation:
 - Aggregates metrics across all windows for robust performance estimates.
 - Results appear in `candidate.validation` as a `WalkForwardResult` with `aggregate_metrics`, `train_metrics`, `validation_metrics`, and `holdout_metrics`.
 
-### 2.9 Scenario gating (optional)
+### 2.11 Scenario gating (optional)
 
 If `context.enable_scenarios=true`, the orchestrator evaluates strategies against predefined crisis scenarios via `backend/app/trading/scenarios.py`:
 
@@ -661,7 +851,7 @@ Scenario gating:
 - Blocks execution if `gating_result.overall_passed=false` unless `context.gating_override=true`.
 - Results appear in `candidate.gating` as a `GatingResult` with `overall_passed`, `blocking_violations`, and per-scenario results.
 
-### 2.10 Kill switch
+### 2.12 Kill switch
 
 Before any strategy execution, the orchestrator checks the kill switch:
 
@@ -680,7 +870,7 @@ The kill switch is managed via `backend/app/routes/control.py`:
 
 When enabled, all strategy runs are blocked at the orchestrator entry point, preventing any backtesting or execution.
 
-### 2.11 Persistence and repository
+### 2.13 Persistence and repository
 
 After generating results, the orchestrator attempts to persist them to the database (non-blocking):
 
@@ -705,7 +895,7 @@ Persistence is handled by:
 
 If Supabase is unavailable, persistence fails gracefully without affecting the strategy run.
 
-### 2.12 Data Management and Caching
+### 2.14 Data Management and Caching
 
 The system includes a comprehensive data management layer for OHLCV market data:
 
@@ -748,7 +938,7 @@ The system includes a comprehensive data management layer for OHLCV market data:
 - `DATA_QUALITY_CHECKS_ENABLED`: Enable/disable quality checks (default: true)
 - `DATA_FILE_FORMAT`: File format for cached data (json or parquet, default: json)
 
-### 2.13 Response assembly
+### 2.15 Response assembly
 
 Each candidate is summarized as:
 

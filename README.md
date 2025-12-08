@@ -133,6 +133,7 @@ npm run frontend
 - API Docs: http://localhost:8000/docs
 - Health: http://localhost:8000/health/
 - Strategy run endpoint: `POST http://localhost:8000/strategies/run`
+- Strategy templates: `GET http://localhost:8000/strategies/templates`
 - Trading status endpoint: `GET http://localhost:8000/trading/account`
 
 ## Project Structure
@@ -148,7 +149,8 @@ npm run frontend
 │   │   ├── agents/
 │   │   │   ├── __init__.py
 │   │   │   ├── google_client.py   # Google GenAI / Agents client wrapper
-│   │   │   └── strategy_planner.py# Calls agent and returns StrategySpec models
+│   │   │   ├── strategy_planner.py# Calls agent and returns StrategySpec models
+│   │   │   └── strategy_templates.py # Predefined strategy templates
 │   │   ├── trading/
 │   │   │   ├── __init__.py
 │   │   │   ├── models.py          # Strategy, backtest, risk, order models
@@ -156,7 +158,9 @@ npm run frontend
 │   │   │   ├── backtester.py      # Deterministic backtest (placeholder)
 │   │   │   ├── risk_engine.py     # Risk checks on proposed trades
 │   │   │   ├── broker_alpaca.py   # Alpaca paper-trading adapter
-│   │   │   └── orchestrator.py    # High-level run_strategy orchestration
+│   │   │   ├── orchestrator.py    # High-level run_strategy orchestration
+│   │   │   ├── external_data.py   # News and social media data providers
+│   │   │   └── decision_engine.py # Multi-source decision framework
 │   │   ├── routes/
 │   │   │   ├── __init__.py
 │   │   │   ├── health.py          # Health check endpoint
@@ -188,20 +192,27 @@ npm run frontend
 
 At a high level, the backend implements the following flow:
 
-1. **Strategy planning (LLM / Google Agent)**  
-   The `agents.strategy_planner` module uses Google GenAI (`google-genai`) to propose candidate strategy specs (`StrategySpec`) based on a mission and context.
+1. **Strategy planning (LLM / Google Agent or Templates)**  
+   The `agents.strategy_planner` module uses Google GenAI (`google-genai`) to propose candidate strategy specs (`StrategySpec`) based on a mission and context. Alternatively, predefined strategy templates can be instantiated directly (bypassing LLM) via `agents.strategy_templates`.
 
-2. **Backtesting**  
+2. **Multi-Strategy Combination (optional)**  
+   When multiple templates are selected, the system uses LLM to intelligently combine them into a unified strategy that captures strengths from all input strategies.
+
+3. **Backtesting**  
    The `trading.backtester` module runs a deterministic (currently placeholder) backtest over OHLCV data from `trading.market_data`, producing metrics such as Sharpe ratio and max drawdown.
 
-3. **Risk engine**  
+4. **Risk engine**  
    The `trading.risk_engine` module enforces simple, deterministic rules such as per-trade notional limits and symbol blacklists.
 
-4. **Execution (optional)**  
+5. **Multi-Source Decision Framework (optional)**  
+   When enabled, the `trading.decision_engine` combines strategy metrics, news sentiment, and social media sentiment to make final trading decisions. External data is provided by `trading.external_data` providers.
+
+6. **Execution (optional)**  
    If enabled in the request context, the orchestrator uses `trading.broker_alpaca` to send approved orders to the Alpaca paper trading API.
 
-5. **API surface**  
-   - `POST /strategies/run` – trigger the full pipeline (plan → backtest → risk → optional execute).  
+7. **API surface**  
+   - `POST /strategies/run` – trigger the full pipeline (plan/templates → backtest → risk → decision engine → optional execute).  
+   - `GET /strategies/templates` – list available predefined strategy templates.  
    - `GET /trading/account` – view Alpaca account + positions snapshot.  
    - `GET /health/` – basic health check.
 
@@ -217,6 +228,18 @@ For a detailed, example-driven explanation of:
 see [`docs/how it works.md`](docs/how%20it%20works.md).
 
 ## Features
+
+### Strategy Generation
+- **Custom Mission-Based**: Generate strategies using natural language missions via Google AI
+- **Predefined Templates**: Select from pre-built strategy templates (volatility breakout, pairs trading, mean reversion) that bypass LLM for faster execution
+- **Multi-Strategy Combination**: When multiple templates are selected, AI intelligently combines them into a unified strategy
+- **Mixed Mode**: Use both predefined templates and custom missions together
+
+### Multi-Source Decision Framework
+- **Integrated Analysis**: Combines mathematical strategy metrics, news sentiment, and social media sentiment
+- **Intelligent Decision Making**: Uses LLM to analyze all sources and make final trading recommendations
+- **External Data Providers**: Framework for news and social media data (currently using mock providers, ready for real API integration)
+- **Confidence Scoring**: Provides confidence scores per symbol based on all data sources
 
 ### Authentication
 - Email/password sign up and login
@@ -236,6 +259,10 @@ see [`docs/how it works.md`](docs/how%20it%20works.md).
 - CORS configured for development
 - Health check endpoint
 - Minimal database client setup
+- Predefined strategy templates (volatility breakout, pairs trading, mean reversion)
+- Multi-source decision framework (combines strategy metrics, news, and social media sentiment)
+- Predefined strategy templates (volatility breakout, pairs trading, mean reversion)
+- Multi-source decision framework (combines strategy metrics, news, and social media sentiment)
 
 ## Available Scripts
 
